@@ -20,8 +20,8 @@ export async function POST(req: NextRequest) {
         },
         body: JSON.stringify({
             "Auth_Header": {
-                "UserId": "croossa",
-                "Password": "934B76F6AFC74C896E1F4BAF077E21A2C09BEC06",
+                "UserId": "dsgfggdgdsg",
+                "Password": "sfdfsdfdsfdss",
                 "Request_Id": "Crossa",
                 "IP_Address": "192.168.1.100",
                 "IMEI_Number": "123456789"
