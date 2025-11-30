@@ -5,30 +5,34 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
-    const body = await req.json();
 
-    const { originId, date, userIp, destinationId } = body;
+    const url = process.env.API_URL as string;
+    const userId = process.env.USERID
+    const pwd =process.env.PWD
+    // const body = await req.json();
 
-    if (!originId || !date || !userIp || !destinationId) {
-        return res.json({ msg: "Add All Necessary Data" }, { status: 400 });
-    }
+    // const { originId, date, userIp, destinationId } = body;
 
-    const buses = await fetch("http://uat.etrav.in/BusHost/BusAPIService.svc/JSONService/Bus_Search", {
+    // if (!originId || !date || !userIp || !destinationId) {
+    //     return res.json({ msg: "Add All Necessary Data" }, { status: 400 });
+    // }
+
+    const buses = await fetch(`${url}/Bus_Search`, {
         method: "POST",
         headers: {
             "Content-Type": "application/json",
         },
         body: JSON.stringify({
             "Auth_Header": {
-                "UserId": "dsgfggdgdsg",
-                "Password": "sfdfsdfdsfdss",
+                "UserId": userId,
+                "Password": pwd,
                 "Request_Id": "Crossa",
                 "IP_Address": "192.168.1.100",
                 "IMEI_Number": "123456789"
             },
             "From_City": "102",
             "To_City": "3",
-            "TravelDate": "03/22/2022"
+            "TravelDate": "11/26/2025"
         }),
     });
 
