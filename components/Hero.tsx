@@ -4,7 +4,6 @@ import { Calendar, MapPin } from "lucide-react";
 export default function Hero() {
   return (
     <div className="relative w-full">
-      {/* HERO IMAGE SECTION */}
       <div
         className="h-[102vh] min-h-[600px] w-full bg-cover bg-no-repeat relative flex flex-col justify-center md:block"
         style={{
@@ -12,8 +11,7 @@ export default function Hero() {
           backgroundPosition: "center 30%",
         }}
       >
-          <div className="absolute inset-0 bg-black opacity-30"></div> 
-        {/* TEXT BLOCK */}
+        <div className="absolute inset-0 bg-black opacity-30"></div> 
         <div
           className="
             absolute 
@@ -46,13 +44,11 @@ export default function Hero() {
           </p>
         </div>
 
-        {/* DESKTOP SEARCH BOX */}
         <div className="hidden md:block absolute left-1/2 transform -translate-x-1/2 bottom-10 w-[90%] max-w-6xl z-20">
           <SearchBox />
         </div>
       </div>
 
-      {/* MOBILE SEARCH BOX */}
       <div className="block md:hidden bg-white w-full py-8 px-4 shadow-lg relative z-20">
         <SearchBox />
       </div>
@@ -64,7 +60,6 @@ function SearchBox() {
   return (
     <div className="bg-white rounded-2xl shadow-xl flex flex-col md:flex-row items-center p-6 gap-4 lg:gap-6">
       
-      {/* FROM */}
       <div className="flex flex-col w-full">
         <label className="text-gray-500 text-sm flex items-center gap-2 mb-1 whitespace-nowrap">
           <MapPin size={16} className="text-yellow-600" />
@@ -77,7 +72,6 @@ function SearchBox() {
         />
       </div>
 
-      {/* TO */}
       <div className="flex flex-col w-full">
         <label className="text-gray-500 text-sm flex items-center gap-2 mb-1 whitespace-nowrap">
           <MapPin size={16} className="text-blue-600" />
@@ -90,7 +84,6 @@ function SearchBox() {
         />
       </div>
 
-      {/* DATE */}
       <div className="flex flex-col w-full">
         <label className="text-gray-500 text-sm flex items-center gap-2 mb-1 whitespace-nowrap">
           <Calendar size={16} className="text-green-600" />
@@ -102,7 +95,6 @@ function SearchBox() {
         />
       </div>
 
-      {/* BUTTON */}
       <div className="w-full md:w-auto mt-2 md:mt-6">
         <Button className="bg-yellow-600 hover:bg-yellow-700 w-full md:w-auto px-8 lg:px-10 py-6 text-base lg:text-lg whitespace-nowrap">
           SEARCH

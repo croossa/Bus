@@ -21,7 +21,6 @@ export default function Navbar() {
 
   return (
     <nav className="fixed top-0 left-0 w-full z-50 transition-all duration-300">
-      {/* NAVBAR TOP */}
       <div
         className={`max-w-7xl mx-auto px-6 py-4 flex justify-between items-center transition-all duration-300 ${
           isScrolled
@@ -29,10 +28,8 @@ export default function Navbar() {
             : "bg-transparent"
         }`}
       >
-        {/* Logo */}
         <h1 className="text-white text-2xl font-bold cursor-pointer">TOURIX</h1>
 
-        {/* Desktop Menu */}
         <ul className="hidden md:flex space-x-8 text-white font-medium">
           <li className="cursor-pointer">Home</li>
           <li className="cursor-pointer">About</li>
@@ -41,7 +38,6 @@ export default function Navbar() {
           <li className="cursor-pointer">Contacts</li>
         </ul>
 
-        {/* Hamburger for Mobile */}
         <button
           className="md:hidden text-white focus:outline-none cursor-pointer"
           onClick={() => setIsOpen(!isOpen)}
@@ -50,7 +46,6 @@ export default function Navbar() {
         </button>
       </div>
 
-      {/* Mobile Menu */}
       <div
         className={`md:hidden transition-all duration-300 overflow-hidden ${
           isOpen ? "max-h-96 py-4" : "max-h-0"
