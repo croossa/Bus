@@ -2,6 +2,9 @@
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Calendar, MapPin } from "lucide-react";
+import CryptoJS from "crypto-js";
+import { useRouter } from "next/navigation";
+
 
 export default function Hero() {
   return (
@@ -48,11 +51,17 @@ export default function Hero() {
 }
 
 function SearchBox() {
+  const router = useRouter()
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
   const [date, setDate] = useState("");
 
   const handleSearch = () => {
+    const payload = { from, to, date }
+    const jsonString = JSON.stringify(payload);
+    const encrypted = CryptoJS.AES.encrypt(jsonString, process.env.NEXT_PUBLIC_SECRET_KEY as string).toString();
+    const encoded = encodeURIComponent(encrypted);
+    router.push(`/buses/${encoded}`);
     console.log({ from, to, date });
   };
 

@@ -1,10 +1,18 @@
 "use client";
+
 import { useEffect, useState } from "react";
 import { Menu, X } from "lucide-react";
+import { usePathname } from "next/navigation"; // 1. Import this
 
 export default function Navbar() {
   const [isScrolled, setIsScrolled] = useState(false);
   const [isOpen, setIsOpen] = useState(false);
+  
+  // 2. Get the current route
+  const pathname = usePathname();
+  
+  // 3. Define what counts as the "Home" page
+  const isHomePage = pathname === "/";
 
   useEffect(() => {
     const handleScroll = () => {
@@ -19,7 +27,12 @@ export default function Navbar() {
     <nav className="fixed top-0 left-0 w-full z-50 transition-all duration-300">
       <div
         className={`max-w-7xl mx-auto px-6 py-4 flex justify-between items-center transition-all duration-300 ${
-          isScrolled ? "bg-black/80 backdrop-blur-md shadow-md" : "bg-transparent"
+          // 4. Update the condition:
+          // If scrolled OR not on homepage -> Dark background
+          // Otherwise (Home page at top) -> Transparent
+          isScrolled || !isHomePage 
+            ? "bg-black/80 backdrop-blur-md shadow-md" 
+            : "bg-transparent"
         }`}
       >
         <h1 className="text-white text-2xl font-bold cursor-pointer">TOURIX</h1>
@@ -40,6 +53,7 @@ export default function Navbar() {
         </button>
       </div>
 
+      {/* Mobile Menu (unchanged) */}
       <div
         className={`fixed top-0 left-0 h-full w-full md:hidden bg-black/80 transform transition-transform duration-300 ${
           isOpen ? "translate-x-0" : "-translate-x-full"
