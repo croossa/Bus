@@ -25,17 +25,17 @@ export default function Hero() {
 
         <div className="absolute top-[30vh] sm:top-[30vh] md:top-[22vh] left-1/2 md:left-[10%] lg:left-[20%] transform md:transform-none -translate-x-1/2 md:translate-x-0 text-center md:text-left w-[90%] sm:w-[80%] md:w-auto max-w-xl z-10">
           <h1
-            className="font-extrabold leading-[0.9] text-6xl sm:text-7xl md:text-7xl lg:text-8xl"
+            className="font-extrabold leading-[0.9] text-6xl sm:text-7xl md:text-7xl lg:text-7xl"
             style={{ color: "#ceb45f" }}
           >
             INDIAN
           </h1>
 
-          <h1 className="text-white font-extrabold leading-[0.9] mt-2 text-6xl sm:text-7xl md:text-7xl lg:text-8xl">
+          <h1 className="text-white font-extrabold leading-[0.9] mt-2 text-6xl sm:text-7xl md:text-7xl lg:text-7xl">
             INTERCITY <br /> ROUTES
           </h1>
 
-          <p className="mt-5 text-white font-bold opacity-90 text-xl sm:text-lg md:text-2xl max-w-[95%] md:max-w-none lg:text-3xl">
+          <p className="mt-5 text-white font-bold opacity-90 text-xl sm:text-lg md:hidden text-2xl max-w-[95%] md:max-w-none lg:text-3xl">
             BOOK TICKETS ONLINE AND <br />
             TRAVEL WITH EASE <br />
             AROUND ALL INDIA
@@ -108,7 +108,7 @@ function SearchBox() {
   };
 
   return (
-    <div className="bg-white rounded-2xl shadow-xl flex flex-col md:flex-row items-center p-6 gap-4 lg:gap-6 relative">
+    <div className="bg-white rounded-2xl shadow-xl flex flex-col md:flex-row items-center  p-6 gap-4 lg:gap-6 relative">
       
       {/* FROM INPUT */}
       <div className="flex flex-col w-full relative z-30">

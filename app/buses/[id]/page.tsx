@@ -1,16 +1,16 @@
 "use client";
 
-import { useParams, useRouter } from "next/navigation"; // 1. Added useRouter
+import { useParams, useRouter } from "next/navigation";
 import CryptoJS from "crypto-js";
 import { useEffect, useState } from "react";
 import Image from "next/image";
 import bgImage from "@/public/assets/searchHeader.jpg";
-import { MapPin, Calendar, ArrowRight, Bus as BusIcon, Wifi, Coffee, ChevronDown } from "lucide-react";
+import { MapPin, Calendar, ArrowRight, Bus as BusIcon, Wifi, Coffee, ChevronDown, AlertCircle } from "lucide-react";
 
-// IMPORT RAW DATA
-import { backendResponse } from "@/public/assets/busData";
+// 1. REMOVED STATIC IMPORT
+// import { backendResponse } from "@/public/assets/busData";
 
-// 2. UPDATED TYPES TO INCLUDE IDS FOR PAYLOAD
+// 2. TYPES
 interface RawBusData {
   Bus_Key: string;
   Operator_Name: string;
@@ -21,9 +21,14 @@ interface RawBusData {
   FareMasters: {
     Total_Amount: number;
   }[];
-  // Added these for the payload
   BoardingDetails: { Boarding_Id: string }[];
   DroppingDetails: { Dropping_Id: string }[];
+}
+
+interface SearchHeaderData {
+  from: string;
+  to: string;
+  date: string;
 }
 
 const calculateDuration = (start: string, end: string) => {
@@ -46,13 +51,15 @@ const calculateDuration = (start: string, end: string) => {
 export default function Page() {
   const primaryColor = "#ceb45f"; 
   const { id } = useParams();
-  const router = useRouter(); // Initialize Router
+  const router = useRouter();
   
-  const [headerData, setHeaderData] = useState<any>(null);
+  const [headerData, setHeaderData] = useState<SearchHeaderData | null>(null);
   const [buses, setBuses] = useState<RawBusData[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
   const [visibleCount, setVisibleCount] = useState(10);
 
+  // 1. Decrypt URL Params
   useEffect(() => {
     if (!id) return;
     try {
@@ -61,45 +68,94 @@ export default function Page() {
       const decryptedString = bytes.toString(CryptoJS.enc.Utf8);
       if (decryptedString) {
         setHeaderData(JSON.parse(decryptedString));
+      } else {
+        setError("Invalid search parameters.");
+        setLoading(false);
       }
     } catch (e) {
       console.error("Header parse error", e);
+      setError("Failed to parse search details.");
+      setLoading(false);
     }
-
-    setTimeout(() => {
-        setBuses(backendResponse.Buses as unknown as RawBusData[]);
-        setLoading(false);
-    }, 500); 
   }, [id]);
+
+  // 2. Fetch Buses from Backend API
+  useEffect(() => {
+    const fetchBuses = async () => {
+      if (!headerData) return;
+
+      setLoading(true);
+      setError("");
+
+      try {
+        const response = await fetch("/api/bussearch", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            from: headerData.from,
+            to: headerData.to,
+            date: headerData.date
+          })
+        });
+
+        const result = await response.json();
+
+        if (!response.ok) {
+          throw new Error(result.msg || "Failed to fetch buses");
+        }
+
+        // 3. Handle Data Structure
+        // Note: Adjust 'result.data.AvailableRoutes' or 'result.data.Buses' depending on your actual API response
+        const busList = result.data?.AvailableRoutes || result.data?.Buses || [];
+        
+        if (Array.isArray(busList)) {
+          setBuses(busList);
+        } else {
+          setBuses([]); // No buses found format
+        }
+
+      } catch (err: any) {
+        console.error("Bus fetch error:", err);
+        setError(err.message || "Something went wrong fetching buses.");
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchBuses();
+  }, [headerData]);
 
   const handleLoadMore = () => {
     setVisibleCount((prev) => prev + 10);
   };
 
-  // 3. NEW FUNCTION TO HANDLE BOOKING
   const handleBuyTicket = (bus: RawBusData) => {
-    // 1. Get Boarding/Dropping IDs (Defaulting to the first one in the list)
     const boardingId = bus.BoardingDetails?.[0]?.Boarding_Id || "";
     const droppingId = bus.DroppingDetails?.[0]?.Dropping_Id || "";
 
-    // 2. Create Payload
+    // Use Search_Key from headerData or pass it differently if needed
+    // Usually, it's specific to the bus result or a global session key.
+    // Assuming the API returns it within the bus object or a global object.
+    // For now, if your API returns a global Search_Key, you might need to store it in state.
+    // If it's per bus, access it from 'bus'. 
+    // Below is a generic approach assuming a global key isn't strictly required if we have Bus_Key.
+    
     const payload = {
       Boarding_Id: boardingId,
       Dropping_Id: droppingId,
       Bus_Key: bus.Bus_Key,
-      Search_Key: (backendResponse as any).Search_Key // Accessing from root JSON
+      Search_Key: "" // Add this if your API returns a generic Search_Key in 'result.data'
     };
 
-    // 3. Encrypt
     const jsonString = JSON.stringify(payload);
     const encrypted = CryptoJS.AES.encrypt(jsonString, process.env.NEXT_PUBLIC_SECRET_KEY as string).toString();
     const encoded = encodeURIComponent(encrypted);
 
-    // 4. Navigate
     router.push(`/bus/${encoded}`);
   };
 
-  if (!headerData) return <div className="p-10 text-center">Loading details...</div>;
+  if (!headerData && loading) return <div className="p-10 text-center text-slate-600 font-bold">Processing Search...</div>;
+  if (!headerData && error) return <div className="p-10 text-center text-red-500 font-bold">{error}</div>;
 
   return (
     <div className="relative min-h-screen font-sans bg-slate-50">
@@ -123,14 +179,14 @@ export default function Page() {
               <div className="flex-[3] flex relative items-stretch border-b lg:border-b-0 lg:border-r border-gray-100">
                 <div className="flex-1 p-6 flex flex-col justify-center border-r border-gray-100">
                   <span className="text-gray-400 text-xs uppercase tracking-wider mb-1">From</span>
-                  <input type="text" value={headerData.from} readOnly className="text-2xl text-slate-900 font-bold outline-none w-full bg-transparent cursor-default" />
+                  <input type="text" value={headerData?.from} readOnly className="text-2xl text-slate-900 font-bold outline-none w-full bg-transparent cursor-default" />
                 </div>
                 <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 z-10 bg-slate-100 p-2 rounded-full border-4 border-white">
                     <ArrowRight size={16} className="text-gray-400" />
                 </div>
                 <div className="flex-1 p-6 flex flex-col justify-center pl-10">
                   <span className="text-gray-400 text-xs uppercase tracking-wider mb-1">To</span>
-                  <input type="text" value={headerData.to} readOnly className="text-2xl text-slate-900 font-bold outline-none w-full bg-transparent cursor-default" />
+                  <input type="text" value={headerData?.to} readOnly className="text-2xl text-slate-900 font-bold outline-none w-full bg-transparent cursor-default" />
                 </div>
               </div>
               <div className="flex-1 p-6 flex flex-col justify-center bg-slate-50/50">
@@ -138,7 +194,7 @@ export default function Page() {
                   <Calendar size={16} color={primaryColor} />
                   <span className="text-gray-400 text-xs uppercase tracking-wider">Date</span>
                 </div>
-                <div className="text-xl text-slate-900 font-bold">{headerData.date}</div>
+                <div className="text-xl text-slate-900 font-bold">{headerData?.date}</div>
               </div>
             </div>
           </div>
@@ -151,10 +207,30 @@ export default function Page() {
                 </h2>
             </div>
 
+            {/* ERROR DISPLAY */}
+            {error && (
+              <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-6 rounded-lg text-center mb-6 flex flex-col items-center gap-2">
+                 <AlertCircle size={32} />
+                 <p>{error}</p>
+                 <button onClick={() => router.back()} className="text-sm underline hover:text-red-900">Go back to Search</button>
+              </div>
+            )}
+
             {loading ? (
-                <div className="text-center py-20 text-gray-500">Finding best routes...</div>
+                <div className="flex flex-col items-center justify-center py-20 text-gray-400">
+                    <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-slate-900 mb-4"></div>
+                    <p>Connecting to operators...</p>
+                </div>
             ) : (
                 <>
+                    {buses.length === 0 && !error && (
+                      <div className="text-center py-20 text-gray-500 bg-white rounded-lg border border-dashed border-gray-300">
+                        <BusIcon className="mx-auto h-12 w-12 text-gray-300 mb-2" />
+                        <p className="text-lg font-medium">No buses found for this route.</p>
+                        <p className="text-sm">Try changing the date or cities.</p>
+                      </div>
+                    )}
+
                     {buses.slice(0, visibleCount).map((bus, index) => (
                         <div key={index} className="bg-white rounded-lg shadow-sm hover:shadow-md transition-shadow duration-300 border border-gray-200 overflow-hidden group">
                             <div className="flex flex-col md:flex-row items-center p-6 md:h-32">
@@ -162,7 +238,7 @@ export default function Page() {
                                     <div className="text-left min-w-[100px]">
                                         <div className="flex items-center gap-2 mb-1">
                                             <MapPin size={16} className="text-yellow-600" />
-                                            <span className="text-sm font-bold text-slate-900 uppercase">{headerData.from}</span>
+                                            <span className="text-sm font-bold text-slate-900 uppercase">{headerData?.from}</span>
                                         </div>
                                         <div className="text-2xl font-black text-slate-900">{bus.Departure_Time}</div>
                                     </div>
@@ -182,7 +258,7 @@ export default function Page() {
                                     <div className="text-left min-w-[100px]">
                                         <div className="flex items-center gap-2 mb-1">
                                             <MapPin size={16} className="text-slate-400" />
-                                            <span className="text-sm font-bold text-slate-900 uppercase">{headerData.to}</span>
+                                            <span className="text-sm font-bold text-slate-900 uppercase">{headerData?.to}</span>
                                         </div>
                                         <div className="text-2xl font-black text-slate-900">{bus.Arrival_Time}</div>
                                     </div>
@@ -199,7 +275,6 @@ export default function Page() {
                                 </div>
 
                                 <div className="w-full md:w-auto mt-6 md:mt-0 md:pl-8">
-                                    {/* 4. ATTACH CLICK HANDLER & CURSOR POINTER */}
                                     <button 
                                         onClick={() => handleBuyTicket(bus)}
                                         className="cursor-pointer w-full flex items-center justify-center gap-2 px-8 py-4 font-bold text-sm tracking-wider uppercase transition-all hover:bg-slate-50 border-2 border-slate-900 text-slate-900 hover:text-white hover:bg-slate-900"
