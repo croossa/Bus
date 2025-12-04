@@ -3,10 +3,7 @@
 import { useParams, useRouter } from "next/navigation";
 import CryptoJS from "crypto-js";
 import { useEffect, useState, useMemo } from "react";
-import { ArrowLeft, User, Disc, MapPin, CheckCircle, AlertCircle } from "lucide-react";
-
-// --- IMPORT YOUR DATA FILE ---
-import { seatMapResponse } from "@/public/assets/seatData";
+import { ArrowLeft, User, Disc, MapPin, CheckCircle, AlertCircle, Info } from "lucide-react";
 
 // --- TYPES ---
 interface FareDetail {
@@ -48,6 +45,7 @@ export default function SeatSelectionPage() {
   
   // --- STATE ---
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
   const [paramsData, setParamsData] = useState<any>(null);
   const [seatData, setSeatData] = useState<any>(null);
   
@@ -64,44 +62,75 @@ export default function SeatSelectionPage() {
 
   const [contactInfo, setContactInfo] = useState({ email: "", mobile: "" });
 
-  // --- INITIALIZATION ---
+  // --- INITIALIZATION & API CALL ---
   useEffect(() => {
     if (!id) return;
-    try {
-      const decoded = decodeURIComponent(id as string);
-      const bytes = CryptoJS.AES.decrypt(decoded, process.env.NEXT_PUBLIC_SECRET_KEY as string);
-      const decryptedString = bytes.toString(CryptoJS.enc.Utf8);
-      
-      if (decryptedString) {
-        setParamsData(JSON.parse(decryptedString));
-        setTimeout(() => {
-            setSeatData(seatMapResponse);
-            if (seatMapResponse.BoardingDetails?.length > 0) setBoardingId(seatMapResponse.BoardingDetails[0].Boarding_Id);
-            if (seatMapResponse.DroppingDetails?.length > 0) setDroppingId(seatMapResponse.DroppingDetails[0].Dropping_Id);
-            setLoading(false);
-        }, 300);
+
+    const fetchSeatMap = async () => {
+      try {
+        const decoded = decodeURIComponent(id as string);
+        const bytes = CryptoJS.AES.decrypt(decoded, process.env.NEXT_PUBLIC_SECRET_KEY as string);
+        const decryptedString = bytes.toString(CryptoJS.enc.Utf8);
+        
+        if (!decryptedString) throw new Error("Failed to decrypt booking details.");
+
+        const parsedParams = JSON.parse(decryptedString);
+        setParamsData(parsedParams);
+
+        const response = await fetch("/api/seatmap", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            Bus_Key: parsedParams.Bus_Key,
+            Search_Key: parsedParams.Search_Key,
+            Boarding_Id: parsedParams.Boarding_Id,
+            Dropping_Id: parsedParams.Dropping_Id
+          })
+        });
+
+        const result = await response.json();
+
+        if (!response.ok) throw new Error(result.msg || "Failed to fetch seat map");
+
+        if (result.data) {
+            setSeatData(result.data);
+            
+            const defaultBoarding = result.data.BoardingDetails?.find((b: any) => b.Boarding_Id === parsedParams.Boarding_Id) 
+                                    || result.data.BoardingDetails?.[0];
+            
+            const defaultDropping = result.data.DroppingDetails?.find((d: any) => d.Dropping_Id === parsedParams.Dropping_Id) 
+                                    || result.data.DroppingDetails?.[0];
+
+            if (defaultBoarding) setBoardingId(defaultBoarding.Boarding_Id);
+            if (defaultDropping) setDroppingId(defaultDropping.Dropping_Id);
+        }
+
+      } catch (e: any) {
+        console.error("Seatmap Error:", e);
+        setError(e.message || "Unable to load seat layout.");
+      } finally {
+        setLoading(false);
       }
-    } catch (e) {
-      console.error("Parse error", e);
-      setLoading(false);
-    }
+    };
+
+    fetchSeatMap();
   }, [id]);
 
-  // --- LOGIC: ORGANIZE SEATS ---
-  const { lowerDeck, upperDeck, maxRowIndex, maxColIndex } = useMemo(() => {
-    if (!seatData || !seatData.SeatMap) return { lowerDeck: [], upperDeck: [], maxRowIndex: 0, maxColIndex: 0 };
-    const lower: Seat[] = [];
-    const upper: Seat[] = [];
-    let maxR = 0, maxC = 0; 
+  // --- UPDATED LOGIC: SINGLE DECK CALCULATION ---
+  const { maxRowIndex, maxColIndex } = useMemo(() => {
+    if (!seatData || !seatData.SeatMap) return { maxRowIndex: 0, maxColIndex: 0 };
+
+    let maxR = 0; 
+    let maxC = 0; 
+
     seatData.SeatMap.forEach((seat: Seat) => {
-      if (seat.ZIndex === "0") lower.push(seat);
-      else upper.push(seat);
       const r = parseInt(seat.Row);
       const c = parseInt(seat.Column);
       if (r > maxR) maxR = r;
       if (c > maxC) maxC = c;
     });
-    return { lowerDeck: lower, upperDeck: upper, maxRowIndex: maxR, maxColIndex: maxC };
+
+    return { maxRowIndex: maxR, maxColIndex: maxC };
   }, [seatData]);
 
   // --- HANDLERS ---
@@ -128,7 +157,7 @@ export default function SeatSelectionPage() {
     }, 0);
   };
 
-  const handleBookTicket = () => {
+  const handleBookTicket = async () => {
     if (selectedSeats.length === 0) return alert("Please select at least one seat.");
     if (!contactInfo.email || !contactInfo.mobile) return alert("Please fill contact details.");
     if (!primaryPax.Name || !primaryPax.Age) return alert("Please fill passenger details.");
@@ -163,19 +192,19 @@ export default function SeatSelectionPage() {
         })
     };
 
-    console.log("FINAL PAYLOAD:", JSON.stringify(bookingPayload, null, 2));
-    alert("Payload created! Check Console.");
+    console.log("FINAL BOOKING PAYLOAD:", JSON.stringify(bookingPayload, null, 2));
+    alert("Booking payload created! See console. (Next step: Send to /api/book-ticket)");
   };
 
-  // --- TRANSPOSED GRID RENDER ---
-  const renderGrid = (seats: Seat[], label: string) => {
-    if (!seats.length) return null;
+  // --- RENDER SINGLE GRID ---
+  const renderGrid = () => {
+    if (!seatData?.SeatMap) return null;
+
     const visualColumns = maxRowIndex + 1; 
     const visualRows = maxColIndex + 1;
 
     return (
       <div className="mb-8">
-        <h3 className="text-gray-400 text-sm font-bold uppercase mb-4 tracking-wider">{label}</h3>
         <div 
             className="relative bg-white p-6 rounded-xl border border-gray-200 shadow-inner inline-block"
             style={{
@@ -186,7 +215,7 @@ export default function SeatSelectionPage() {
             }}
         >
           <div className="absolute -right-8 top-0 text-gray-300"><Disc size={24} /></div>
-          {seats.map((seat) => {
+          {seatData.SeatMap.map((seat: Seat) => {
             const isSelected = selectedSeats.some(s => s.Seat_Number === seat.Seat_Number);
             const gridColStart = parseInt(seat.Row) + 1;
             const gridRowStart = parseInt(seat.Column) + 1;
@@ -216,6 +245,7 @@ export default function SeatSelectionPage() {
   };
 
   if (loading) return <div className="min-h-screen flex items-center justify-center font-bold text-gray-500">Loading Seatmap...</div>;
+  if (error) return <div className="min-h-screen flex flex-col items-center justify-center text-red-500 gap-4"><AlertCircle size={48}/><p>{error}</p><button onClick={() => router.back()} className="underline">Go Back</button></div>;
 
   return (
     <div className="min-h-screen bg-slate-50 font-sans pb-20">
@@ -230,16 +260,31 @@ export default function SeatSelectionPage() {
         </div>
 
         <div className="max-w-7xl mx-auto px-4 py-8 grid grid-cols-1 lg:grid-cols-12 gap-8">
+            
+            {/* LEFT COLUMN: SEAT MAP */}
             <div className="lg:col-span-7 xl:col-span-8 flex flex-col items-center lg:items-start">
+                
+                {/* 1. ADDED DISCLAIMER NOTE */}
+                <div className="w-full bg-yellow-50 border border-yellow-200 rounded-lg p-4 mb-6 flex items-start gap-3 text-yellow-800">
+                    <Info className="shrink-0 mt-0.5" size={18} />
+                    <p className="text-sm">
+                        <strong>Note:</strong> This seatmap is not original, it just shows available seats.
+                    </p>
+                </div>
+
                 <div className="flex flex-wrap gap-4 mb-6 text-sm text-gray-600">
                     <div className="flex items-center gap-2"><div className="w-5 h-5 border-2 border-gray-200 bg-white rounded shadow-sm"></div> Available</div>
                     <div className="flex items-center gap-2"><div className="w-5 h-5 bg-slate-900 rounded shadow-sm"></div> Selected</div>
                     <div className="flex items-center gap-2"><div className="w-5 h-5 bg-gray-300 rounded"></div> Booked</div>
+                    <div className="flex items-center gap-2"><div className="w-5 h-5 border-2 border-pink-400 rounded"></div> Ladies</div>
                 </div>
-                {renderGrid(lowerDeck, "Lower Deck")}
-                {renderGrid(upperDeck, "Upper Deck")}
+
+                {/* 2. SINGLE GRID RENDERING */}
+                <h3 className="text-gray-400 text-sm font-bold uppercase mb-4 tracking-wider w-full text-left">Bus Layout</h3>
+                {renderGrid()}
             </div>
 
+            {/* RIGHT COLUMN: BOOKING FORM */}
             <div className="lg:col-span-5 xl:col-span-4">
                 <div className="bg-white rounded-xl shadow-lg border border-gray-100 overflow-hidden sticky top-24">
                     <div className="p-6 bg-slate-50 border-b border-gray-100">
@@ -282,10 +327,9 @@ export default function SeatSelectionPage() {
                                         Selected Seats: <span className="text-slate-900">{selectedSeats.map(s => s.Seat_Number).join(", ")}</span>
                                     </div>
 
-                                    {/* Individual Seat Price (Optional: Display price of first seat just to show rate) */}
+                                    {/* Individual Seat Price */}
                                     {selectedSeats.length > 0 && (
                                         <div className="mb-4 text-sm font-bold text-slate-700">
-                                            {/* CHANGED TO RUPEE SYMBOL */}
                                             Rate per seat: ₹{selectedSeats[0].FareMaster.Total_Amount}
                                         </div>
                                     )}
@@ -372,7 +416,6 @@ export default function SeatSelectionPage() {
                     <div className="p-6 bg-slate-50 border-t border-gray-200">
                         <div className="flex justify-between items-end mb-4">
                             <span className="text-gray-500 text-sm">Total Amount</span>
-                            {/* CHANGED TO RUPEE SYMBOL */}
                             <span className="text-3xl font-black text-slate-900">₹{calculateTotal().toFixed(2)}</span>
                         </div>
                         <button 
@@ -387,5 +430,5 @@ export default function SeatSelectionPage() {
             </div>
         </div>
     </div>
-  );
+  ); 
 }

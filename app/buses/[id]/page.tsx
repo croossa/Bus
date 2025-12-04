@@ -7,10 +7,7 @@ import Image from "next/image";
 import bgImage from "@/public/assets/searchHeader.jpg";
 import { MapPin, Calendar, ArrowRight, Bus as BusIcon, Wifi, Coffee, ChevronDown, AlertCircle } from "lucide-react";
 
-// 1. REMOVED STATIC IMPORT
-// import { backendResponse } from "@/public/assets/busData";
-
-// 2. TYPES
+// TYPES based on your API Response
 interface RawBusData {
   Bus_Key: string;
   Operator_Name: string;
@@ -55,6 +52,10 @@ export default function Page() {
   
   const [headerData, setHeaderData] = useState<SearchHeaderData | null>(null);
   const [buses, setBuses] = useState<RawBusData[]>([]);
+  
+  // 1. NEW STATE FOR SEARCH KEY
+  const [searchKey, setSearchKey] = useState<string>(""); 
+  
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [visibleCount, setVisibleCount] = useState(10);
@@ -104,14 +105,16 @@ export default function Page() {
           throw new Error(result.msg || "Failed to fetch buses");
         }
 
-        // 3. Handle Data Structure
-        // Note: Adjust 'result.data.AvailableRoutes' or 'result.data.Buses' depending on your actual API response
-        const busList = result.data?.AvailableRoutes || result.data?.Buses || [];
+        // 2. EXTRACT DATA FROM API RESPONSE
+        // Based on your JSON: data.Buses is the array, data.Search_Key is the key
+        const busList = result.data?.Buses || [];
+        const apiSearchKey = result.data?.Search_Key || "";
         
         if (Array.isArray(busList)) {
           setBuses(busList);
+          setSearchKey(apiSearchKey); // Store the search key
         } else {
-          setBuses([]); // No buses found format
+          setBuses([]); 
         }
 
       } catch (err: any) {
@@ -129,24 +132,26 @@ export default function Page() {
     setVisibleCount((prev) => prev + 10);
   };
 
+  // 3. UPDATED BUY TICKET FUNCTION
   const handleBuyTicket = (bus: RawBusData) => {
+    // Get First Boarding/Dropping point as default
     const boardingId = bus.BoardingDetails?.[0]?.Boarding_Id || "";
     const droppingId = bus.DroppingDetails?.[0]?.Dropping_Id || "";
 
-    // Use Search_Key from headerData or pass it differently if needed
-    // Usually, it's specific to the bus result or a global session key.
-    // Assuming the API returns it within the bus object or a global object.
-    // For now, if your API returns a global Search_Key, you might need to store it in state.
-    // If it's per bus, access it from 'bus'. 
-    // Below is a generic approach assuming a global key isn't strictly required if we have Bus_Key.
-    
+    if (!searchKey) {
+        alert("Session expired or invalid search key. Please search again.");
+        return;
+    }
+
+    // Create Payload for SeatMap Page
     const payload = {
       Boarding_Id: boardingId,
       Dropping_Id: droppingId,
       Bus_Key: bus.Bus_Key,
-      Search_Key: "" // Add this if your API returns a generic Search_Key in 'result.data'
+      Search_Key: searchKey // Using the state variable we saved earlier
     };
 
+    // Encrypt and Navigate
     const jsonString = JSON.stringify(payload);
     const encrypted = CryptoJS.AES.encrypt(jsonString, process.env.NEXT_PUBLIC_SECRET_KEY as string).toString();
     const encoded = encodeURIComponent(encrypted);
