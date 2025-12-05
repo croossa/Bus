@@ -116,8 +116,8 @@ export async function POST(req: NextRequest) {
           IP_Address: "127.0.0.1",
           IMEI_Number: "123456789",
         },
-        From_City: "102",  //fromCity.CityID.toString()
-        To_City: "3",  //toCity.CityID.toString()
+        From_City: "102",  //fromCity.CityID.toString()  "102"
+        To_City: "3",  //toCity.CityID.toString() 
         TravelDate: formattedDate,
       }),
     });

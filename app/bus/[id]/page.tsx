@@ -3,7 +3,8 @@
 import { useParams, useRouter } from "next/navigation";
 import CryptoJS from "crypto-js";
 import { useEffect, useState, useMemo } from "react";
-import { ArrowLeft, User, Disc, MapPin, CheckCircle, AlertCircle, Info } from "lucide-react";
+import { ArrowLeft, User, Disc, MapPin, CheckCircle, AlertCircle, Info, Armchair } from "lucide-react";
+import Script from "next/script";
 
 // --- TYPES ---
 interface FareDetail {
@@ -116,7 +117,7 @@ export default function SeatSelectionPage() {
     fetchSeatMap();
   }, [id]);
 
-  // --- UPDATED LOGIC: SINGLE DECK CALCULATION ---
+  // --- GRID CALCULATION ---
   const { maxRowIndex, maxColIndex } = useMemo(() => {
     if (!seatData || !seatData.SeatMap) return { maxRowIndex: 0, maxColIndex: 0 };
 
@@ -124,8 +125,8 @@ export default function SeatSelectionPage() {
     let maxC = 0; 
 
     seatData.SeatMap.forEach((seat: Seat) => {
-      const r = parseInt(seat.Row);
-      const c = parseInt(seat.Column);
+      const r = Number(seat.Row);
+      const c = Number(seat.Column);
       if (r > maxR) maxR = r;
       if (c > maxC) maxC = c;
     });
@@ -151,10 +152,7 @@ export default function SeatSelectionPage() {
   };
 
   const calculateTotal = () => {
-    return selectedSeats.reduce((acc, seat) => {
-        const amount = Number(seat.FareMaster?.Total_Amount || 0);
-        return acc + amount;
-    }, 0);
+    return selectedSeats.reduce((acc, seat) => acc + Number(seat.FareMaster?.Total_Amount || 0), 0);
   };
 
   const handleBookTicket = async () => {
@@ -162,80 +160,171 @@ export default function SeatSelectionPage() {
     if (!contactInfo.email || !contactInfo.mobile) return alert("Please fill contact details.");
     if (!primaryPax.Name || !primaryPax.Age) return alert("Please fill passenger details.");
 
-    const bookingPayload = {
-        "Auth_Header": {
-            "UserId": "xxxxxxxxxx", "Password": "xxxxxxxxxx", "Request_Id": "NextJS", "IP_Address": "127.0.0.1", "IMEI_Number": "123"
-        },
-        "Boarding_Id": boardingId,
-        "Dropping_Id": droppingId,
-        "Bus_Key": paramsData?.Bus_Key, 
-        "Search_Key": paramsData?.Search_Key, 
-        "SeatMap_Key": seatData?.SeatMap_Key,
-        "Customer_Mobile": contactInfo.mobile,
-        "Passenger_Mobile": contactInfo.mobile,
-        "Passenger_Email": contactInfo.email,
-        "SendEmail": true, "SendSMS": true, "GST": false, "CorporatePaymentMode": 0, "CorporateStatus": "0",
-        "CostCenterId": 0, "Deal_Key": "", "GSTIN": "", "GSTINHolderAddress": "", "GSTINHolderName": "", "ProjectId": 1, "Remarks": "Online Booking",
-        
-        "PAX_Details": selectedSeats.map((seat, index) => {
-            return {
-                "PAX_Id": index + 1,
-                "PAX_Name": primaryPax.Name, 
-                "Age": parseInt(primaryPax.Age), 
-                "Gender": parseInt(primaryPax.Gender as any),
-                "Title": primaryPax.Title, 
-                "Seat_Number": seat.Seat_Number, 
-                "Ladies_Seat": seat.Ladies_Seat,
-                "Primary": index === 0, 
-                "Status": "", "Ticket_Number": "", "Penalty_Charge": "", "Id_Number": "0", "Id_Type": 0, "DOB": ""
-            };
-        })
+    const totalAmount = calculateTotal();
+    
+    // 1. Prepare Bus Payload
+    const busPayload = {
+        Boarding_Id: boardingId,
+        Dropping_Id: droppingId,
+        Bus_Key: paramsData?.Bus_Key, 
+        Search_Key: paramsData?.Search_Key, 
+        SeatMap_Key: seatData?.SeatMap_Key, 
+        Customer_Mobile: contactInfo.mobile,
+        Passenger_Mobile: contactInfo.mobile,
+        Passenger_Email: contactInfo.email,
+        SendEmail: true, SendSMS: true, GST: false, CorporatePaymentMode: 0, CorporateStatus: "0",
+        CostCenterId: 0, Deal_Key: "", GSTIN: "", GSTINHolderAddress: "", GSTINHolderName: "", ProjectId: 1, Remarks: "Online Booking",
+        PAX_Details: selectedSeats.map((seat, index) => ({
+            PAX_Id: index + 1,
+            PAX_Name: primaryPax.Name, 
+            Age: parseInt(primaryPax.Age), 
+            Gender: parseInt(primaryPax.Gender as any),
+            Title: primaryPax.Title, 
+            Seat_Number: seat.Seat_Number, 
+            Ladies_Seat: seat.Ladies_Seat,
+            Primary: index === 0, 
+            Status: "", Ticket_Number: "", Penalty_Charge: "", Id_Number: "0", Id_Type: 0, DOB: ""
+        }))
     };
 
-    console.log("FINAL BOOKING PAYLOAD:", JSON.stringify(bookingPayload, null, 2));
-    alert("Booking payload created! See console. (Next step: Send to /api/book-ticket)");
+    try {
+        setLoading(true);
+        
+        // 2. Call /api/tempbooking (Blocks seat + Creates Razorpay Order)
+        const initRes = await fetch("/api/tempbooking", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ busPayload, amount: totalAmount })
+        });
+
+        const initData = await initRes.json();
+
+        if (!initRes.ok) {
+             alert(`Booking Failed: ${initData.error || initData.msg}`);
+             setLoading(false);
+             return;
+        }
+
+        console.log("Razorpay Order ID:", initData.data?.razorpayOrderId);
+
+        // 3. Open Razorpay
+        const options = {
+            key: process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID, 
+            amount: initData.data.amount, 
+            currency: initData.data.currency,
+            name: "Crossa Bus",
+            description: "Bus Ticket Booking",
+            order_id: initData.data.razorpayOrderId, // Provided by your backend
+            handler: async function (response: any) {
+                
+                // 4. Payment Success -> Call Final Booking
+                try {
+                    const confirmRes = await fetch("/api/confirm-booking", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({
+                            busOrderKey: initData.data.busOrderKey, // Key from temp booking
+                            razorpayPaymentId: response.razorpay_payment_id,
+                            razorpayOrderId: response.razorpay_order_id,
+                            razorpaySignature: response.razorpay_signature,
+                            amount: totalAmount
+                        })
+                    });
+
+                    const confirmData = await confirmRes.json();
+
+                    if (confirmRes.ok) {
+                        // Get Ticket No
+                        const ticketNo = confirmData.data?.TicketNo || confirmData.data?.PNR || "Confirmed";
+                        alert(`Ticket Booked Successfully! PNR: ${ticketNo}`);
+                        router.push("/"); // Redirect to success page
+                    } else {
+                        alert("Payment Successful, but Ticket Booking Failed: " + confirmData.error);
+                    }
+                } catch (err) {
+                    console.error(err);
+                    alert("Error confirming ticket after payment.");
+                }
+            },
+            prefill: {
+                name: primaryPax.Name,
+                email: contactInfo.email,
+                contact: contactInfo.mobile,
+            },
+            theme: { color: "#ceb45f" },
+        };
+
+        const rzp = new (window as any).Razorpay(options);
+        rzp.on("payment.failed", function (response: any) {
+             alert("Payment Failed: " + response.error.description);
+        });
+        rzp.open();
+        
+    } catch (error) {
+        console.error(error);
+        alert("Network Error");
+    } finally {
+        setLoading(false);
+    }
   };
 
-  // --- RENDER SINGLE GRID ---
+  // --- RENDER GRID ---
   const renderGrid = () => {
     if (!seatData?.SeatMap) return null;
 
+    // Visual Dimensions (1-based index)
     const visualColumns = maxRowIndex + 1; 
     const visualRows = maxColIndex + 1;
 
     return (
-      <div className="mb-8">
+      <div className="mb-8 w-full overflow-x-auto">
         <div 
-            className="relative bg-white p-6 rounded-xl border border-gray-200 shadow-inner inline-block"
+            className="relative bg-white p-8 rounded-xl border border-gray-200 shadow-inner inline-grid place-items-center mx-auto"
             style={{
-                display: 'grid',
-                gridTemplateColumns: `repeat(${visualColumns}, 50px)`,
-                gridTemplateRows: `repeat(${visualRows}, 50px)`,
-                gap: '10px'
+                gridTemplateColumns: `repeat(${visualColumns}, 45px)`,
+                gridTemplateRows: `repeat(${visualRows}, 45px)`,
+                gap: '10px',
             }}
         >
-          <div className="absolute -right-8 top-0 text-gray-300"><Disc size={24} /></div>
-          {seatData.SeatMap.map((seat: Seat) => {
+          <div className="absolute right-4 top-4 text-gray-300"><Disc size={24} /></div>
+
+          {seatData.SeatMap.map((seat: Seat, index: number) => {
             const isSelected = selectedSeats.some(s => s.Seat_Number === seat.Seat_Number);
-            const gridColStart = parseInt(seat.Row) + 1;
-            const gridRowStart = parseInt(seat.Column) + 1;
             
+            // Transpose Coordinates for Vertical Bus Layout
+            const gridColumnStart = Number(seat.Row) + 1; 
+            const gridRowStart = Number(seat.Column) + 1;
+            const rowSpan = Number(seat.Length); 
+            const colSpan = Number(seat.Width);
+
             return (
               <button
-                key={seat.Seat_Key}
+                key={`${seat.Seat_Number}-${index}`}
                 onClick={() => toggleSeat(seat)}
                 disabled={!seat.Bookable}
                 className={`
-                  relative flex items-center justify-center text-xs font-bold transition-all duration-200
-                  ${!seat.Bookable ? "bg-gray-200 text-gray-400 cursor-not-allowed border-gray-200" : ""}
-                  ${seat.Bookable && !isSelected ? "bg-white border-2 hover:border-slate-900 text-slate-700 shadow-sm" : ""}
-                  ${isSelected ? "bg-slate-900 text-white border-slate-900" : ""}
-                  ${seat.Ladies_Seat && !isSelected ? "border-pink-400 text-pink-600" : "border-gray-200"}
-                  rounded-md
+                  relative flex items-center justify-center text-[10px] font-bold transition-all duration-200 rounded-md border
+                  ${!seat.Bookable 
+                    ? "bg-gray-200 text-gray-400 cursor-not-allowed border-gray-200" 
+                    : isSelected 
+                      ? "bg-slate-900 text-white border-slate-900" 
+                      : seat.Ladies_Seat 
+                        ? "bg-pink-50 border-pink-300 text-pink-600 hover:border-pink-500" 
+                        : "bg-white border-gray-300 text-slate-700 hover:border-slate-900 shadow-sm"
+                  }
                 `}
-                style={{ gridColumn: `${gridColStart} / span ${seat.Width}`, gridRow: `${gridRowStart} / span ${seat.Length}` }}
+                style={{ 
+                  gridColumn: `${gridColumnStart} / span ${colSpan}`, 
+                  gridRow: `${gridRowStart} / span ${rowSpan}`,
+                  width: '100%',
+                  height: '100%'
+                }}
+                title={`Seat: ${seat.Seat_Number} | Price: ₹${seat.FareMaster.Total_Amount}`}
               >
                 {seat.Seat_Number}
+                {(rowSpan > 1 || colSpan > 1) && (
+                   <div className="absolute bottom-1 right-1 w-1.5 h-1.5 rounded-full bg-current opacity-20"></div>
+                )}
               </button>
             );
           })}
@@ -249,6 +338,9 @@ export default function SeatSelectionPage() {
 
   return (
     <div className="min-h-screen bg-slate-50 font-sans pb-20">
+        {/* 3. LOAD RAZORPAY SCRIPT */}
+        <Script src="https://checkout.razorpay.com/v1/checkout.js" />
+
         <div className="bg-slate-900 text-white p-6 sticky top-0 z-50 shadow-md">
             <div className="max-w-7xl mx-auto flex items-center gap-4">
                 <button onClick={() => router.back()} className="p-2 hover:bg-white/10 rounded-full transition"><ArrowLeft size={20} /></button>
@@ -261,30 +353,26 @@ export default function SeatSelectionPage() {
 
         <div className="max-w-7xl mx-auto px-4 py-8 grid grid-cols-1 lg:grid-cols-12 gap-8">
             
-            {/* LEFT COLUMN: SEAT MAP */}
+            {/* LEFT: SEAT MAP */}
             <div className="lg:col-span-7 xl:col-span-8 flex flex-col items-center lg:items-start">
                 
-                {/* 1. ADDED DISCLAIMER NOTE */}
                 <div className="w-full bg-yellow-50 border border-yellow-200 rounded-lg p-4 mb-6 flex items-start gap-3 text-yellow-800">
                     <Info className="shrink-0 mt-0.5" size={18} />
-                    <p className="text-sm">
-                        <strong>Note:</strong> This seatmap is not original, it just shows available seats.
-                    </p>
+                    <p className="text-sm"><strong>Note:</strong> This seatmap is not original, it just shows available seats.</p>
                 </div>
 
-                <div className="flex flex-wrap gap-4 mb-6 text-sm text-gray-600">
-                    <div className="flex items-center gap-2"><div className="w-5 h-5 border-2 border-gray-200 bg-white rounded shadow-sm"></div> Available</div>
-                    <div className="flex items-center gap-2"><div className="w-5 h-5 bg-slate-900 rounded shadow-sm"></div> Selected</div>
-                    <div className="flex items-center gap-2"><div className="w-5 h-5 bg-gray-300 rounded"></div> Booked</div>
-                    <div className="flex items-center gap-2"><div className="w-5 h-5 border-2 border-pink-400 rounded"></div> Ladies</div>
+                <div className="flex flex-wrap gap-6 mb-8 text-xs font-medium text-gray-600 bg-white p-4 rounded-lg border border-gray-100 w-full">
+                    <div className="flex items-center gap-2"><div className="w-4 h-4 border border-gray-300 bg-white rounded"></div> Available</div>
+                    <div className="flex items-center gap-2"><div className="w-4 h-4 bg-slate-900 rounded"></div> Selected</div>
+                    <div className="flex items-center gap-2"><div className="w-4 h-4 bg-gray-200 rounded"></div> Booked</div>
+                    <div className="flex items-center gap-2"><div className="w-4 h-4 border border-pink-300 bg-pink-50 rounded"></div> Ladies</div>
                 </div>
 
-                {/* 2. SINGLE GRID RENDERING */}
                 <h3 className="text-gray-400 text-sm font-bold uppercase mb-4 tracking-wider w-full text-left">Bus Layout</h3>
                 {renderGrid()}
             </div>
 
-            {/* RIGHT COLUMN: BOOKING FORM */}
+            {/* RIGHT: BOOKING FORM */}
             <div className="lg:col-span-5 xl:col-span-4">
                 <div className="bg-white rounded-xl shadow-lg border border-gray-100 overflow-hidden sticky top-24">
                     <div className="p-6 bg-slate-50 border-b border-gray-100">
@@ -322,17 +410,13 @@ export default function SeatSelectionPage() {
                                 </h3>
                                 
                                 <div className="bg-gray-50 p-4 rounded-lg border border-gray-200">
-                                    {/* Seat Summary */}
                                     <div className="mb-4 text-xs font-bold text-slate-500 uppercase tracking-wider">
                                         Selected Seats: <span className="text-slate-900">{selectedSeats.map(s => s.Seat_Number).join(", ")}</span>
                                     </div>
 
-                                    {/* Individual Seat Price */}
-                                    {selectedSeats.length > 0 && (
-                                        <div className="mb-4 text-sm font-bold text-slate-700">
-                                            Rate per seat: ₹{selectedSeats[0].FareMaster.Total_Amount}
-                                        </div>
-                                    )}
+                                    <div className="mb-4 text-sm font-bold text-slate-700">
+                                        Rate per seat: ₹{selectedSeats[0].FareMaster.Total_Amount}
+                                    </div>
 
                                     <div className="grid grid-cols-12 gap-2">
                                         <div className="col-span-3">
@@ -387,7 +471,7 @@ export default function SeatSelectionPage() {
                             </div>
                         ) : (
                              <div className="text-center py-8 text-gray-400 border-2 border-dashed rounded-lg">
-                                <AlertCircle className="mx-auto mb-2 opacity-50" />
+                                <Armchair className="mx-auto mb-2 opacity-50" />
                                 <p>Select a seat to proceed</p>
                              </div>
                         )}
@@ -430,5 +514,5 @@ export default function SeatSelectionPage() {
             </div>
         </div>
     </div>
-  ); 
+  );
 }
