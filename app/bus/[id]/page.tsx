@@ -3,7 +3,7 @@
 import { useParams, useRouter } from "next/navigation";
 import CryptoJS from "crypto-js";
 import { useEffect, useState, useMemo } from "react";
-import { ArrowLeft, User, Disc, MapPin, CheckCircle, AlertCircle, Info, Armchair } from "lucide-react";
+import { ArrowLeft, User, Disc, MapPin, CheckCircle, AlertCircle, Info, Armchair, Loader2 } from "lucide-react";
 import Script from "next/script";
 import {
   AlertDialog,
@@ -77,18 +77,20 @@ export default function SeatSelectionPage() {
   const [alertConfig, setAlertConfig] = useState({
     title: "",
     description: "",
-    type: "error" as "error" | "success",
+    type: "error" as "error" | "success" | "loading",
     onConfirm: () => {}, 
   });
 
-  const triggerAlert = (title: string, description: string, type: "error" | "success" = "error", onConfirm = () => {}) => {
+  const triggerAlert = (title: string, description: string, type: "error" | "success" | "loading" = "error", onConfirm = () => {}) => {
     setAlertConfig({ 
         title, 
         description, 
         type,
         onConfirm: () => {
-            setIsAlertOpen(false);
-            onConfirm();
+            if (type !== 'loading') { 
+                setIsAlertOpen(false);
+                onConfirm();
+            }
         } 
     });
     setIsAlertOpen(true);
@@ -156,7 +158,7 @@ export default function SeatSelectionPage() {
     const upper: Seat[] = [];
 
     seatData.SeatMap.forEach((seat: Seat) => {
-      // ZIndex "0" = Lower, "1" = Upper (Standard for most bus APIs)
+      // ZIndex "0" = Lower, "1" = Upper
       if (seat.ZIndex === "1") {
         upper.push(seat);
       } else {
@@ -171,27 +173,29 @@ export default function SeatSelectionPage() {
     };
   }, [seatData]);
 
-  // Helper to calculate grid size for a specific deck
   const getGridDimensions = (seats: Seat[]) => {
     let maxCols = 0; // Visual X (API Row)
     let maxRows = 0; // Visual Y (API Column)
+    const occupiedCoords = new Set<string>();
 
     seats.forEach((seat) => {
-        // Transposed Logic: 
-        // API Row -> Visual Column (Width axis)
-        // API Col -> Visual Row (Length axis)
-        
         const colIndex = Number(seat.Row);
         const rowIndex = Number(seat.Column);
-        const width = Number(seat.Width);
-        const length = Number(seat.Length);
+        const width = Number(seat.Width || 1);
+        const length = Number(seat.Length || 1);
 
-        // Find the furthest edge
         if (colIndex + width > maxCols) maxCols = colIndex + width;
         if (rowIndex + length > maxRows) maxRows = rowIndex + length;
+
+        // Mark occupied spots
+        for(let i=0; i<width; i++) {
+            for(let j=0; j<length; j++) {
+                occupiedCoords.add(`${colIndex + i}-${rowIndex + j}`);
+            }
+        }
     });
 
-    return { maxCols, maxRows };
+    return { maxCols, maxRows, occupiedCoords };
   };
 
   // --- HANDLERS ---
@@ -219,50 +223,12 @@ export default function SeatSelectionPage() {
   };
 
   const handleBookTicket = async () => {
-    // 1. Validation
-    const missingFields: string[] = [];
-
-    if (selectedSeats.length === 0) missingFields.push("Seat Selection");
-    if (!contactInfo.email?.trim()) missingFields.push("Email Address");
-    if (!contactInfo.mobile?.trim()) missingFields.push("Mobile Number");
-    if (!primaryPax.Name?.trim()) missingFields.push("Passenger Name");
-    if (!primaryPax.Age?.trim()) missingFields.push("Passenger Age");
-
-    if (missingFields.length > 0) {
-        triggerAlert(
-            "Missing Details", 
-            `Please fill in the following fields: ${missingFields.join(", ")}.`, 
-            "error"
-        );
-        return;
-    }
-
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    const mobileRegex = /^[0-9]{10}$/;
-
-    if (!emailRegex.test(contactInfo.email)) {
-        triggerAlert("Invalid Email", "Please enter a valid email address.", "error");
-        return;
-    }
-    
-    if (!mobileRegex.test(contactInfo.mobile)) {
-        triggerAlert("Invalid Mobile", "Please enter a valid 10-digit mobile number.", "error");
-        return;
-    }
-
-    if (primaryPax.Name.trim().length < 2) {
-         triggerAlert("Invalid Name", "Passenger name is too short.", "error");
-         return;
-    }
-
-    if (parseInt(primaryPax.Age) <= 0 || parseInt(primaryPax.Age) > 120) {
-        triggerAlert("Invalid Age", "Please enter a valid age (1-120).", "error");
-        return;
-    }
+    if (selectedSeats.length === 0) return triggerAlert("No Seats Selected", "Please select at least one seat.", "error");
+    if (!contactInfo.email || !contactInfo.mobile) return triggerAlert("Missing Info", "Please provide contact details.", "error");
+    if (!primaryPax.Name || !primaryPax.Age) return triggerAlert("Missing Info", "Please provide passenger details.", "error");
 
     const totalAmount = calculateTotal();
     
-    // 2. Prepare Payload
     const busPayload = {
         Boarding_Id: boardingId,
         Dropping_Id: droppingId,
@@ -289,23 +255,18 @@ export default function SeatSelectionPage() {
 
     try {
         setLoading(true);
-        
-        // 3. Temp Booking
         const initRes = await fetch("/api/tempbooking", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ busPayload, amount: totalAmount })
         });
-
         const initData = await initRes.json();
-
         if (!initRes.ok) {
              triggerAlert("Booking Failed", initData.error || initData.msg, "error");
              setLoading(false);
              return;
         }
 
-        // 4. Open Razorpay
         const options = {
             key: process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID, 
             amount: initData.data.amount, 
@@ -314,8 +275,9 @@ export default function SeatSelectionPage() {
             description: "Bus Ticket Booking",
             order_id: initData.data.razorpayOrderId, 
             handler: async function (response: any) {
-                
-                // 5. Confirm Booking
+                // SHOW WAITING
+                triggerAlert("Please Wait...", "Payment verified. Finalizing booking...", "loading");
+
                 try {
                     const confirmRes = await fetch("/api/confirm-booking", {
                         method: "POST",
@@ -328,52 +290,68 @@ export default function SeatSelectionPage() {
                             amount: totalAmount
                         })
                     });
-
                     const confirmData = await confirmRes.json();
-
                     if (confirmRes.ok) {
-                        const ticketNo = confirmData.data?.TicketNo || confirmData.data?.PNR || "Confirmed";
-                        triggerAlert(
-                            "Booking Successful!", 
-                            `Your ticket has been booked successfully. PNR/Ticket No: ${ticketNo}`,
-                            "success",
-                            () => router.push("/") 
-                        );
+                        const ticketNo = confirmData.data?.Transport_PNR || confirmData.data?.TicketNo || "Confirmed";
+                        triggerAlert("Booking Successful!", `PNR: ${ticketNo}`, "success", () => router.push("/"));
                     } else {
-                        triggerAlert("Booking Failed", "Payment was successful, but the ticket booking failed. " + confirmData.error, "error");
+                        triggerAlert("Booking Failed", confirmData.error, "error");
                     }
                 } catch (err) {
-                    console.error(err);
-                    triggerAlert("System Error", "An error occurred while confirming your ticket.", "error");
+                    triggerAlert("System Error", "Error confirming ticket.", "error");
                 }
             },
-            prefill: {
-                name: primaryPax.Name,
-                email: contactInfo.email,
-                contact: contactInfo.mobile,
-            },
+            prefill: { name: primaryPax.Name, email: contactInfo.email, contact: contactInfo.mobile },
             theme: { color: "#000000" },
         };
 
         const rzp = new (window as any).Razorpay(options);
-        rzp.on("payment.failed", function (response: any) {
-             triggerAlert("Payment Failed", response.error.description, "error");
-        });
+        rzp.on("payment.failed", (response: any) => triggerAlert("Payment Failed", response.error.description, "error"));
         rzp.open();
         
     } catch (error) {
-        console.error(error);
-        triggerAlert("Network Error", "Unable to connect to the server. Please check your internet connection.", "error");
+        triggerAlert("Network Error", "Connection failed.", "error");
     } finally {
         setLoading(false);
     }
   };
 
-  // --- REUSABLE GRID RENDERER ---
+  // --- RENDER DECK GRID ---
   const renderDeckGrid = (seats: Seat[], title: string) => {
     if (!seats || seats.length === 0) return null;
 
-    const { maxCols, maxRows } = getGridDimensions(seats);
+    const { maxCols, maxRows, occupiedCoords } = getGridDimensions(seats);
+
+    // Map Actual Seats for quick lookup
+    const seatMap = new Map<string, Seat>();
+    seats.forEach((seat) => {
+        const r = Number(seat.Row);
+        const c = Number(seat.Column);
+        seatMap.set(`${r}-${c}`, seat);
+    });
+
+    const gridItems = [];
+    
+    // Y-Axis (Length)
+    for (let row = 0; row < maxRows; row++) {
+        // X-Axis (Width)
+        for (let col = 0; col < maxCols; col++) {
+            
+            const coordKey = `${col}-${row}`;
+
+            if (seatMap.has(coordKey)) {
+                // RENDER ACTUAL SEAT
+                gridItems.push({ type: 'seat', data: seatMap.get(coordKey)!, col, row });
+            } else if (!occupiedCoords.has(coordKey)) {
+                // RENDER GHOST SEAT (If not part of another seat's span)
+                // Note: Only render ghost if this column generally has seats (simple heuristic)
+                const isAisle = !seats.some(s => Number(s.Row) === col);
+                if (!isAisle) {
+                     gridItems.push({ type: 'ghost', col, row });
+                }
+            }
+        }
+    }
 
     return (
       <div className="mb-8 w-full">
@@ -382,7 +360,6 @@ export default function SeatSelectionPage() {
             <div 
                 className="relative bg-white p-8 rounded-xl border border-gray-200 shadow-inner inline-grid place-items-center mx-auto"
                 style={{
-                    // Explicitly defining grid size based on calculated max dimensions
                     gridTemplateColumns: `repeat(${maxCols}, 45px)`,
                     gridTemplateRows: `repeat(${maxRows}, 45px)`,
                     gap: '10px',
@@ -390,49 +367,64 @@ export default function SeatSelectionPage() {
             >
             <div className="absolute right-4 top-4 text-gray-300"><Disc size={24} /></div>
 
-            {seats.map((seat: Seat, index: number) => {
-                const isSelected = selectedSeats.some(s => s.Seat_Number === seat.Seat_Number);
-                
-                // Coordinates (1-based for CSS Grid)
-                // API Row -> X Axis (Column)
-                // API Col -> Y Axis (Row)
-                const gridColumnStart = Number(seat.Row) + 1; 
-                const gridRowStart = Number(seat.Column) + 1;
-                
-                // Spanning
-                const rowSpan = Number(seat.Length); 
-                const colSpan = Number(seat.Width);
+            {gridItems.map((item, index) => {
+                // 1-based index for CSS Grid
+                const gridCol = item.col + 1;
+                const gridRow = item.row + 1;
 
-                return (
-                <button
-                    key={`${seat.Seat_Number}-${index}`}
-                    onClick={() => toggleSeat(seat)}
-                    disabled={!seat.Bookable}
-                    className={`
-                    relative flex items-center justify-center text-[10px] font-bold transition-all duration-200 rounded-md border
-                    ${!seat.Bookable 
-                        ? "bg-gray-200 text-gray-400 cursor-not-allowed border-gray-200" 
-                        : isSelected 
-                        ? "bg-black text-white border-black" 
-                        : seat.Ladies_Seat 
-                            ? "bg-pink-50 border-pink-300 text-pink-600 hover:border-pink-500" 
-                            : "bg-white border-gray-300 text-slate-700 hover:border-black shadow-sm"
-                    }
-                    `}
-                    style={{ 
-                    gridColumn: `${gridColumnStart} / span ${colSpan}`, 
-                    gridRow: `${gridRowStart} / span ${rowSpan}`,
-                    width: '100%',
-                    height: '100%'
-                    }}
-                    title={`Seat: ${seat.Seat_Number} | Price: ₹${seat.FareMaster.Total_Amount}`}
-                >
-                    {seat.Seat_Number}
-                    {(rowSpan > 1 || colSpan > 1) && (
-                    <div className="absolute bottom-1 right-1 w-1.5 h-1.5 rounded-full bg-current opacity-20"></div>
-                    )}
-                </button>
-                );
+                if (item.type === 'seat') {
+                    const seat = item.data as Seat;
+                    const isSelected = selectedSeats.some(s => s.Seat_Number === seat.Seat_Number);
+                    const rowSpan = Number(seat.Length || 1);
+                    const colSpan = Number(seat.Width || 1);
+
+                    return (
+                        <button
+                            key={`seat-${index}`}
+                            onClick={() => toggleSeat(seat)}
+                            disabled={!seat.Bookable}
+                            className={`
+                            relative flex items-center justify-center text-[10px] font-bold transition-all duration-200 rounded-md border
+                            ${!seat.Bookable 
+                                ? "bg-gray-200 text-gray-400 cursor-not-allowed border-gray-200" 
+                                : isSelected 
+                                ? "bg-black text-white border-black" 
+                                : seat.Ladies_Seat 
+                                    ? "bg-pink-50 border-pink-300 text-pink-600 hover:border-pink-500" 
+                                    : "bg-white border-gray-300 text-slate-700 hover:border-black shadow-sm"
+                            }
+                            `}
+                            style={{ 
+                                gridColumn: `${gridCol} / span ${colSpan}`, 
+                                gridRow: `${gridRow} / span ${rowSpan}`,
+                                width: '100%',
+                                height: '100%'
+                            }}
+                            title={`Seat: ${seat.Seat_Number} | ₹${seat.FareMaster?.Total_Amount}`}
+                        >
+                            {seat.Seat_Number}
+                            {(rowSpan > 1 || colSpan > 1) && (
+                                <div className="absolute bottom-1 right-1 w-1.5 h-1.5 rounded-full bg-current opacity-20"></div>
+                            )}
+                        </button>
+                    );
+                } else {
+                    // GHOST SEAT
+                    return (
+                        <div
+                            key={`ghost-${index}`}
+                            className="bg-gray-100 border border-gray-200 rounded-md flex items-center justify-center cursor-not-allowed opacity-50"
+                            style={{ 
+                                gridColumn: `${gridCol} / span 1`, 
+                                gridRow: `${gridRow} / span 1`,
+                                width: '100%',
+                                height: '100%'
+                            }}
+                        >
+                             <div className="w-1.5 h-1.5 bg-gray-300 rounded-full" />
+                        </div>
+                    );
+                }
             })}
             </div>
         </div>
@@ -446,7 +438,6 @@ export default function SeatSelectionPage() {
   return (
     <div className="min-h-screen bg-slate-50 font-sans pb-20">
         <Script src="https://checkout.razorpay.com/v1/checkout.js" />
-
         <div className="bg-black text-white p-6 sticky top-0 z-50 shadow-md">
             <div className="max-w-7xl mx-auto flex items-center gap-4">
                 <button onClick={() => router.back()} className="p-2 hover:bg-white/10 rounded-full transition"><ArrowLeft size={20} /></button>
@@ -458,15 +449,11 @@ export default function SeatSelectionPage() {
         </div>
 
         <div className="max-w-7xl mx-auto px-4 py-8 grid grid-cols-1 lg:grid-cols-12 gap-8">
-            
-            {/* LEFT: SEAT MAP */}
             <div className="lg:col-span-7 xl:col-span-8 flex flex-col items-center lg:items-start">
-                
                 <div className="w-full bg-yellow-50 border border-yellow-200 rounded-lg p-4 mb-6 flex items-start gap-3 text-yellow-800">
                     <Info className="shrink-0 mt-0.5" size={18} />
                     <p className="text-sm"><strong>Note:</strong> This seatmap is not original, it just shows available seats.</p>
                 </div>
-
                 <div className="flex flex-wrap gap-6 mb-8 text-xs font-medium text-gray-600 bg-white p-4 rounded-lg border border-gray-100 w-full">
                     <div className="flex items-center gap-2"><div className="w-4 h-4 border border-gray-300 bg-white rounded"></div> Available</div>
                     <div className="flex items-center gap-2"><div className="w-4 h-4 bg-black rounded"></div> Selected</div>
@@ -474,28 +461,27 @@ export default function SeatSelectionPage() {
                     <div className="flex items-center gap-2"><div className="w-4 h-4 border border-pink-300 bg-pink-50 rounded"></div> Ladies</div>
                 </div>
 
-                {/* --- RENDER LOGIC: SINGLE OR DOUBLE DECK --- */}
                 {hasUpperDeck ? (
                     <>
                         {renderDeckGrid(lowerDeck, "Lower Deck")}
                         {renderDeckGrid(upperDeck, "Upper Deck")}
                     </>
                 ) : (
-                    // If no upper deck, just show the single grid (using 'lowerDeck' array which contains all seats)
                     renderDeckGrid(lowerDeck, "Bus Layout")
                 )}
             </div>
-
-            {/* RIGHT: BOOKING FORM */}
+            
+            {/* RIGHT COLUMN */}
             <div className="lg:col-span-5 xl:col-span-4">
-                <div className="bg-white rounded-xl shadow-lg border border-gray-100 overflow-hidden sticky top-24">
+                 <div className="bg-white rounded-xl shadow-lg border border-gray-100 overflow-hidden sticky top-24">
                     <div className="p-6 bg-slate-50 border-b border-gray-100">
                         <h2 className="text-lg font-bold text-slate-900">Your Journey</h2>
                     </div>
-
                     <div className="p-6 space-y-6 max-h-[70vh] overflow-y-auto">
+                        {/* Forms... */}
+                        {/* (This part is unchanged from your previous code, keeping it concise for brevity) */}
                         <div className="space-y-4">
-                            <div>
+                             <div>
                                 <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Boarding Point</label>
                                 <div className="relative">
                                     <MapPin className="absolute left-3 top-3 text-gray-400" size={16} />
@@ -520,7 +506,6 @@ export default function SeatSelectionPage() {
                                 <h3 className="font-bold text-slate-900 flex items-center gap-2">
                                     <User size={18} /> Primary Passenger
                                 </h3>
-                                
                                 <div className="bg-gray-50 p-4 rounded-lg border border-gray-200">
                                     <div className="mb-4 text-xs font-bold text-slate-500 uppercase tracking-wider">
                                         Selected Seats: <span className="text-slate-900">{selectedSeats.map(s => s.Seat_Number).join(", ")}</span>
@@ -555,7 +540,6 @@ export default function SeatSelectionPage() {
                                 <p>Select a seat to proceed</p>
                              </div>
                         )}
-
                         {selectedSeats.length > 0 && (
                             <div className="space-y-3 pt-4 border-t border-gray-100">
                                 <h3 className="font-bold text-slate-900 text-sm">Contact Information</h3>
@@ -564,7 +548,6 @@ export default function SeatSelectionPage() {
                             </div>
                         )}
                     </div>
-
                     <div className="p-6 bg-slate-50 border-t border-gray-200">
                         <div className="flex justify-between items-end mb-4">
                             <span className="text-gray-500 text-sm">Total Amount</span>
@@ -578,25 +561,24 @@ export default function SeatSelectionPage() {
             </div>
         </div>
 
-        {/* --- ALERT DIALOG --- */}
         <AlertDialog open={isAlertOpen} onOpenChange={setIsAlertOpen}>
             <AlertDialogContent className="bg-white rounded-xl shadow-2xl border-0">
                 <AlertDialogHeader>
-                    <AlertDialogTitle className={`flex items-center gap-2 text-xl ${alertConfig.type === 'success' ? 'text-green-600' : 'text-red-600'}`}>
-                        {alertConfig.type === 'success' ? <CheckCircle size={24} /> : <AlertCircle size={24} />}
+                    <AlertDialogTitle className={`flex items-center gap-2 text-xl ${
+                        alertConfig.type === 'success' ? 'text-green-600' : 
+                        alertConfig.type === 'loading' ? 'text-blue-600' : 'text-red-600'
+                    }`}>
+                        {alertConfig.type === 'success' ? <CheckCircle size={24} /> : 
+                         alertConfig.type === 'loading' ? <Loader2 size={24} className="animate-spin" /> : 
+                         <AlertCircle size={24} />}
                         {alertConfig.title}
                     </AlertDialogTitle>
-                    <AlertDialogDescription className="text-gray-600 text-base mt-2">
-                        {alertConfig.description}
-                    </AlertDialogDescription>
+                    <AlertDialogDescription className="text-gray-600 text-base mt-2 whitespace-pre-wrap">{alertConfig.description}</AlertDialogDescription>
                 </AlertDialogHeader>
                 <AlertDialogFooter className="mt-4">
-                    <AlertDialogAction 
-                        onClick={alertConfig.onConfirm}
-                        className="bg-black hover:bg-gray-800 text-white px-6"
-                    >
-                        Okay
-                    </AlertDialogAction>
+                    {alertConfig.type !== 'loading' && (
+                        <AlertDialogAction onClick={alertConfig.onConfirm} className="bg-black hover:bg-gray-800 text-white px-6">Okay</AlertDialogAction>
+                    )}
                 </AlertDialogFooter>
             </AlertDialogContent>
         </AlertDialog>
