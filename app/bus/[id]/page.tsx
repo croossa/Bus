@@ -5,6 +5,15 @@ import CryptoJS from "crypto-js";
 import { useEffect, useState, useMemo } from "react";
 import { ArrowLeft, User, Disc, MapPin, CheckCircle, AlertCircle, Info, Armchair } from "lucide-react";
 import Script from "next/script";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 
 // --- TYPES ---
 interface FareDetail {
@@ -63,7 +72,29 @@ export default function SeatSelectionPage() {
 
   const [contactInfo, setContactInfo] = useState({ email: "", mobile: "" });
 
-  // --- INITIALIZATION & API CALL ---
+  // --- ALERT STATE ---
+  const [isAlertOpen, setIsAlertOpen] = useState(false);
+  const [alertConfig, setAlertConfig] = useState({
+    title: "",
+    description: "",
+    type: "error" as "error" | "success",
+    onConfirm: () => {}, 
+  });
+
+  const triggerAlert = (title: string, description: string, type: "error" | "success" = "error", onConfirm = () => {}) => {
+    setAlertConfig({ 
+        title, 
+        description, 
+        type,
+        onConfirm: () => {
+            setIsAlertOpen(false);
+            onConfirm();
+        } 
+    });
+    setIsAlertOpen(true);
+  };
+
+  // --- INITIALIZATION ---
   useEffect(() => {
     if (!id) return;
 
@@ -117,22 +148,51 @@ export default function SeatSelectionPage() {
     fetchSeatMap();
   }, [id]);
 
-  // --- GRID CALCULATION ---
-  const { maxRowIndex, maxColIndex } = useMemo(() => {
-    if (!seatData || !seatData.SeatMap) return { maxRowIndex: 0, maxColIndex: 0 };
+  // --- LOGIC: SEPARATE DECKS & CALCULATE DIMENSIONS ---
+  const { lowerDeck, upperDeck, hasUpperDeck } = useMemo(() => {
+    if (!seatData || !seatData.SeatMap) return { lowerDeck: [], upperDeck: [], hasUpperDeck: false };
 
-    let maxR = 0; 
-    let maxC = 0; 
+    const lower: Seat[] = [];
+    const upper: Seat[] = [];
 
     seatData.SeatMap.forEach((seat: Seat) => {
-      const r = Number(seat.Row);
-      const c = Number(seat.Column);
-      if (r > maxR) maxR = r;
-      if (c > maxC) maxC = c;
+      // ZIndex "0" = Lower, "1" = Upper (Standard for most bus APIs)
+      if (seat.ZIndex === "1") {
+        upper.push(seat);
+      } else {
+        lower.push(seat);
+      }
     });
 
-    return { maxRowIndex: maxR, maxColIndex: maxC };
+    return { 
+      lowerDeck: lower, 
+      upperDeck: upper, 
+      hasUpperDeck: upper.length > 0 
+    };
   }, [seatData]);
+
+  // Helper to calculate grid size for a specific deck
+  const getGridDimensions = (seats: Seat[]) => {
+    let maxCols = 0; // Visual X (API Row)
+    let maxRows = 0; // Visual Y (API Column)
+
+    seats.forEach((seat) => {
+        // Transposed Logic: 
+        // API Row -> Visual Column (Width axis)
+        // API Col -> Visual Row (Length axis)
+        
+        const colIndex = Number(seat.Row);
+        const rowIndex = Number(seat.Column);
+        const width = Number(seat.Width);
+        const length = Number(seat.Length);
+
+        // Find the furthest edge
+        if (colIndex + width > maxCols) maxCols = colIndex + width;
+        if (rowIndex + length > maxRows) maxRows = rowIndex + length;
+    });
+
+    return { maxCols, maxRows };
+  };
 
   // --- HANDLERS ---
   const toggleSeat = (seat: Seat) => {
@@ -142,7 +202,10 @@ export default function SeatSelectionPage() {
     if (isSelected) {
       setSelectedSeats((prev) => prev.filter((s) => s.Seat_Number !== seat.Seat_Number));
     } else {
-      if (selectedSeats.length >= 6) return alert("You can only select up to 6 seats.");
+      if (selectedSeats.length >= 6) {
+        triggerAlert("Limit Reached", "You can only select up to 6 seats per booking.", "error");
+        return;
+      }
       setSelectedSeats((prev) => [...prev, seat]);
     }
   };
@@ -156,13 +219,50 @@ export default function SeatSelectionPage() {
   };
 
   const handleBookTicket = async () => {
-    if (selectedSeats.length === 0) return alert("Please select at least one seat.");
-    if (!contactInfo.email || !contactInfo.mobile) return alert("Please fill contact details.");
-    if (!primaryPax.Name || !primaryPax.Age) return alert("Please fill passenger details.");
+    // 1. Validation
+    const missingFields: string[] = [];
+
+    if (selectedSeats.length === 0) missingFields.push("Seat Selection");
+    if (!contactInfo.email?.trim()) missingFields.push("Email Address");
+    if (!contactInfo.mobile?.trim()) missingFields.push("Mobile Number");
+    if (!primaryPax.Name?.trim()) missingFields.push("Passenger Name");
+    if (!primaryPax.Age?.trim()) missingFields.push("Passenger Age");
+
+    if (missingFields.length > 0) {
+        triggerAlert(
+            "Missing Details", 
+            `Please fill in the following fields: ${missingFields.join(", ")}.`, 
+            "error"
+        );
+        return;
+    }
+
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    const mobileRegex = /^[0-9]{10}$/;
+
+    if (!emailRegex.test(contactInfo.email)) {
+        triggerAlert("Invalid Email", "Please enter a valid email address.", "error");
+        return;
+    }
+    
+    if (!mobileRegex.test(contactInfo.mobile)) {
+        triggerAlert("Invalid Mobile", "Please enter a valid 10-digit mobile number.", "error");
+        return;
+    }
+
+    if (primaryPax.Name.trim().length < 2) {
+         triggerAlert("Invalid Name", "Passenger name is too short.", "error");
+         return;
+    }
+
+    if (parseInt(primaryPax.Age) <= 0 || parseInt(primaryPax.Age) > 120) {
+        triggerAlert("Invalid Age", "Please enter a valid age (1-120).", "error");
+        return;
+    }
 
     const totalAmount = calculateTotal();
     
-    // 1. Prepare Bus Payload
+    // 2. Prepare Payload
     const busPayload = {
         Boarding_Id: boardingId,
         Dropping_Id: droppingId,
@@ -190,7 +290,7 @@ export default function SeatSelectionPage() {
     try {
         setLoading(true);
         
-        // 2. Call /api/tempbooking (Blocks seat + Creates Razorpay Order)
+        // 3. Temp Booking
         const initRes = await fetch("/api/tempbooking", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -200,30 +300,28 @@ export default function SeatSelectionPage() {
         const initData = await initRes.json();
 
         if (!initRes.ok) {
-             alert(`Booking Failed: ${initData.error || initData.msg}`);
+             triggerAlert("Booking Failed", initData.error || initData.msg, "error");
              setLoading(false);
              return;
         }
 
-        console.log("Razorpay Order ID:", initData.data?.razorpayOrderId);
-
-        // 3. Open Razorpay
+        // 4. Open Razorpay
         const options = {
             key: process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID, 
             amount: initData.data.amount, 
             currency: initData.data.currency,
             name: "Crossa Bus",
             description: "Bus Ticket Booking",
-            order_id: initData.data.razorpayOrderId, // Provided by your backend
+            order_id: initData.data.razorpayOrderId, 
             handler: async function (response: any) {
                 
-                // 4. Payment Success -> Call Final Booking
+                // 5. Confirm Booking
                 try {
                     const confirmRes = await fetch("/api/confirm-booking", {
                         method: "POST",
                         headers: { "Content-Type": "application/json" },
                         body: JSON.stringify({
-                            busOrderKey: initData.data.busOrderKey, // Key from temp booking
+                            busOrderKey: initData.data.busOrderKey,
                             razorpayPaymentId: response.razorpay_payment_id,
                             razorpayOrderId: response.razorpay_order_id,
                             razorpaySignature: response.razorpay_signature,
@@ -234,16 +332,19 @@ export default function SeatSelectionPage() {
                     const confirmData = await confirmRes.json();
 
                     if (confirmRes.ok) {
-                        // Get Ticket No
                         const ticketNo = confirmData.data?.TicketNo || confirmData.data?.PNR || "Confirmed";
-                        alert(`Ticket Booked Successfully! PNR: ${ticketNo}`);
-                        router.push("/"); // Redirect to success page
+                        triggerAlert(
+                            "Booking Successful!", 
+                            `Your ticket has been booked successfully. PNR/Ticket No: ${ticketNo}`,
+                            "success",
+                            () => router.push("/") 
+                        );
                     } else {
-                        alert("Payment Successful, but Ticket Booking Failed: " + confirmData.error);
+                        triggerAlert("Booking Failed", "Payment was successful, but the ticket booking failed. " + confirmData.error, "error");
                     }
                 } catch (err) {
                     console.error(err);
-                    alert("Error confirming ticket after payment.");
+                    triggerAlert("System Error", "An error occurred while confirming your ticket.", "error");
                 }
             },
             prefill: {
@@ -251,83 +352,89 @@ export default function SeatSelectionPage() {
                 email: contactInfo.email,
                 contact: contactInfo.mobile,
             },
-            theme: { color: "#ceb45f" },
+            theme: { color: "#000000" },
         };
 
         const rzp = new (window as any).Razorpay(options);
         rzp.on("payment.failed", function (response: any) {
-             alert("Payment Failed: " + response.error.description);
+             triggerAlert("Payment Failed", response.error.description, "error");
         });
         rzp.open();
         
     } catch (error) {
         console.error(error);
-        alert("Network Error");
+        triggerAlert("Network Error", "Unable to connect to the server. Please check your internet connection.", "error");
     } finally {
         setLoading(false);
     }
   };
 
-  // --- RENDER GRID ---
-  const renderGrid = () => {
-    if (!seatData?.SeatMap) return null;
+  // --- REUSABLE GRID RENDERER ---
+  const renderDeckGrid = (seats: Seat[], title: string) => {
+    if (!seats || seats.length === 0) return null;
 
-    // Visual Dimensions (1-based index)
-    const visualColumns = maxRowIndex + 1; 
-    const visualRows = maxColIndex + 1;
+    const { maxCols, maxRows } = getGridDimensions(seats);
 
     return (
-      <div className="mb-8 w-full overflow-x-auto">
-        <div 
-            className="relative bg-white p-8 rounded-xl border border-gray-200 shadow-inner inline-grid place-items-center mx-auto"
-            style={{
-                gridTemplateColumns: `repeat(${visualColumns}, 45px)`,
-                gridTemplateRows: `repeat(${visualRows}, 45px)`,
-                gap: '10px',
-            }}
-        >
-          <div className="absolute right-4 top-4 text-gray-300"><Disc size={24} /></div>
-
-          {seatData.SeatMap.map((seat: Seat, index: number) => {
-            const isSelected = selectedSeats.some(s => s.Seat_Number === seat.Seat_Number);
-            
-            // Transpose Coordinates for Vertical Bus Layout
-            const gridColumnStart = Number(seat.Row) + 1; 
-            const gridRowStart = Number(seat.Column) + 1;
-            const rowSpan = Number(seat.Length); 
-            const colSpan = Number(seat.Width);
-
-            return (
-              <button
-                key={`${seat.Seat_Number}-${index}`}
-                onClick={() => toggleSeat(seat)}
-                disabled={!seat.Bookable}
-                className={`
-                  relative flex items-center justify-center text-[10px] font-bold transition-all duration-200 rounded-md border
-                  ${!seat.Bookable 
-                    ? "bg-gray-200 text-gray-400 cursor-not-allowed border-gray-200" 
-                    : isSelected 
-                      ? "bg-slate-900 text-white border-slate-900" 
-                      : seat.Ladies_Seat 
-                        ? "bg-pink-50 border-pink-300 text-pink-600 hover:border-pink-500" 
-                        : "bg-white border-gray-300 text-slate-700 hover:border-slate-900 shadow-sm"
-                  }
-                `}
-                style={{ 
-                  gridColumn: `${gridColumnStart} / span ${colSpan}`, 
-                  gridRow: `${gridRowStart} / span ${rowSpan}`,
-                  width: '100%',
-                  height: '100%'
+      <div className="mb-8 w-full">
+        <h3 className="text-gray-400 text-sm font-bold uppercase mb-4 tracking-wider w-full text-left">{title}</h3>
+        <div className="overflow-x-auto pb-4">
+            <div 
+                className="relative bg-white p-8 rounded-xl border border-gray-200 shadow-inner inline-grid place-items-center mx-auto"
+                style={{
+                    // Explicitly defining grid size based on calculated max dimensions
+                    gridTemplateColumns: `repeat(${maxCols}, 45px)`,
+                    gridTemplateRows: `repeat(${maxRows}, 45px)`,
+                    gap: '10px',
                 }}
-                title={`Seat: ${seat.Seat_Number} | Price: ₹${seat.FareMaster.Total_Amount}`}
-              >
-                {seat.Seat_Number}
-                {(rowSpan > 1 || colSpan > 1) && (
-                   <div className="absolute bottom-1 right-1 w-1.5 h-1.5 rounded-full bg-current opacity-20"></div>
-                )}
-              </button>
-            );
-          })}
+            >
+            <div className="absolute right-4 top-4 text-gray-300"><Disc size={24} /></div>
+
+            {seats.map((seat: Seat, index: number) => {
+                const isSelected = selectedSeats.some(s => s.Seat_Number === seat.Seat_Number);
+                
+                // Coordinates (1-based for CSS Grid)
+                // API Row -> X Axis (Column)
+                // API Col -> Y Axis (Row)
+                const gridColumnStart = Number(seat.Row) + 1; 
+                const gridRowStart = Number(seat.Column) + 1;
+                
+                // Spanning
+                const rowSpan = Number(seat.Length); 
+                const colSpan = Number(seat.Width);
+
+                return (
+                <button
+                    key={`${seat.Seat_Number}-${index}`}
+                    onClick={() => toggleSeat(seat)}
+                    disabled={!seat.Bookable}
+                    className={`
+                    relative flex items-center justify-center text-[10px] font-bold transition-all duration-200 rounded-md border
+                    ${!seat.Bookable 
+                        ? "bg-gray-200 text-gray-400 cursor-not-allowed border-gray-200" 
+                        : isSelected 
+                        ? "bg-black text-white border-black" 
+                        : seat.Ladies_Seat 
+                            ? "bg-pink-50 border-pink-300 text-pink-600 hover:border-pink-500" 
+                            : "bg-white border-gray-300 text-slate-700 hover:border-black shadow-sm"
+                    }
+                    `}
+                    style={{ 
+                    gridColumn: `${gridColumnStart} / span ${colSpan}`, 
+                    gridRow: `${gridRowStart} / span ${rowSpan}`,
+                    width: '100%',
+                    height: '100%'
+                    }}
+                    title={`Seat: ${seat.Seat_Number} | Price: ₹${seat.FareMaster.Total_Amount}`}
+                >
+                    {seat.Seat_Number}
+                    {(rowSpan > 1 || colSpan > 1) && (
+                    <div className="absolute bottom-1 right-1 w-1.5 h-1.5 rounded-full bg-current opacity-20"></div>
+                    )}
+                </button>
+                );
+            })}
+            </div>
         </div>
       </div>
     );
@@ -338,10 +445,9 @@ export default function SeatSelectionPage() {
 
   return (
     <div className="min-h-screen bg-slate-50 font-sans pb-20">
-        {/* 3. LOAD RAZORPAY SCRIPT */}
         <Script src="https://checkout.razorpay.com/v1/checkout.js" />
 
-        <div className="bg-slate-900 text-white p-6 sticky top-0 z-50 shadow-md">
+        <div className="bg-black text-white p-6 sticky top-0 z-50 shadow-md">
             <div className="max-w-7xl mx-auto flex items-center gap-4">
                 <button onClick={() => router.back()} className="p-2 hover:bg-white/10 rounded-full transition"><ArrowLeft size={20} /></button>
                 <div>
@@ -363,13 +469,21 @@ export default function SeatSelectionPage() {
 
                 <div className="flex flex-wrap gap-6 mb-8 text-xs font-medium text-gray-600 bg-white p-4 rounded-lg border border-gray-100 w-full">
                     <div className="flex items-center gap-2"><div className="w-4 h-4 border border-gray-300 bg-white rounded"></div> Available</div>
-                    <div className="flex items-center gap-2"><div className="w-4 h-4 bg-slate-900 rounded"></div> Selected</div>
+                    <div className="flex items-center gap-2"><div className="w-4 h-4 bg-black rounded"></div> Selected</div>
                     <div className="flex items-center gap-2"><div className="w-4 h-4 bg-gray-200 rounded"></div> Booked</div>
                     <div className="flex items-center gap-2"><div className="w-4 h-4 border border-pink-300 bg-pink-50 rounded"></div> Ladies</div>
                 </div>
 
-                <h3 className="text-gray-400 text-sm font-bold uppercase mb-4 tracking-wider w-full text-left">Bus Layout</h3>
-                {renderGrid()}
+                {/* --- RENDER LOGIC: SINGLE OR DOUBLE DECK --- */}
+                {hasUpperDeck ? (
+                    <>
+                        {renderDeckGrid(lowerDeck, "Lower Deck")}
+                        {renderDeckGrid(upperDeck, "Upper Deck")}
+                    </>
+                ) : (
+                    // If no upper deck, just show the single grid (using 'lowerDeck' array which contains all seats)
+                    renderDeckGrid(lowerDeck, "Bus Layout")
+                )}
             </div>
 
             {/* RIGHT: BOOKING FORM */}
@@ -380,7 +494,6 @@ export default function SeatSelectionPage() {
                     </div>
 
                     <div className="p-6 space-y-6 max-h-[70vh] overflow-y-auto">
-                        {/* Boarding/Dropping Selects */}
                         <div className="space-y-4">
                             <div>
                                 <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Boarding Point</label>
@@ -402,7 +515,6 @@ export default function SeatSelectionPage() {
                             </div>
                         </div>
 
-                        {/* SINGLE PASSENGER FORM */}
                         {selectedSeats.length > 0 ? (
                             <div className="space-y-4">
                                 <h3 className="font-bold text-slate-900 flex items-center gap-2">
@@ -413,58 +525,26 @@ export default function SeatSelectionPage() {
                                     <div className="mb-4 text-xs font-bold text-slate-500 uppercase tracking-wider">
                                         Selected Seats: <span className="text-slate-900">{selectedSeats.map(s => s.Seat_Number).join(", ")}</span>
                                     </div>
-
                                     <div className="mb-4 text-sm font-bold text-slate-700">
                                         Rate per seat: ₹{selectedSeats[0].FareMaster.Total_Amount}
                                     </div>
-
                                     <div className="grid grid-cols-12 gap-2">
                                         <div className="col-span-3">
-                                            <select 
-                                                className="w-full p-2 text-sm border rounded"
-                                                value={primaryPax.Title}
-                                                onChange={(e) => handlePrimaryPaxChange("Title", e.target.value)}
-                                            >
+                                            <select className="w-full p-2 text-sm border rounded" value={primaryPax.Title} onChange={(e) => handlePrimaryPaxChange("Title", e.target.value)}>
                                                 <option value="Mr">Mr</option>
                                                 <option value="Mrs">Mrs</option>
                                                 <option value="Ms">Ms</option>
                                             </select>
                                         </div>
                                         <div className="col-span-9">
-                                            <input 
-                                                type="text" 
-                                                placeholder="Full Name" 
-                                                className="w-full p-2 text-sm border rounded focus:border-slate-900 outline-none"
-                                                value={primaryPax.Name}
-                                                onChange={(e) => handlePrimaryPaxChange("Name", e.target.value)}
-                                            />
+                                            <input type="text" placeholder="Full Name" className="w-full p-2 text-sm border rounded focus:border-slate-900 outline-none" value={primaryPax.Name} onChange={(e) => handlePrimaryPaxChange("Name", e.target.value)} />
                                         </div>
                                         <div className="col-span-4">
-                                            <input 
-                                                type="number" 
-                                                placeholder="Age" 
-                                                className="w-full p-2 text-sm border rounded focus:border-slate-900 outline-none"
-                                                value={primaryPax.Age}
-                                                onChange={(e) => handlePrimaryPaxChange("Age", e.target.value)}
-                                            />
+                                            <input type="number" placeholder="Age" className="w-full p-2 text-sm border rounded focus:border-slate-900 outline-none" value={primaryPax.Age} onChange={(e) => handlePrimaryPaxChange("Age", e.target.value)} />
                                         </div>
                                         <div className="col-span-8 flex gap-2 items-center bg-white border rounded px-2">
-                                            <label className="flex items-center gap-1 text-xs cursor-pointer">
-                                                <input 
-                                                    type="radio" 
-                                                    name="primary_gender" 
-                                                    checked={primaryPax.Gender === 0}
-                                                    onChange={() => handlePrimaryPaxChange("Gender", 0)}
-                                                /> Male
-                                            </label>
-                                            <label className="flex items-center gap-1 text-xs cursor-pointer">
-                                                <input 
-                                                    type="radio" 
-                                                    name="primary_gender" 
-                                                    checked={primaryPax.Gender === 1}
-                                                    onChange={() => handlePrimaryPaxChange("Gender", 1)}
-                                                /> Female
-                                            </label>
+                                            <label className="flex items-center gap-1 text-xs cursor-pointer"><input type="radio" name="g" checked={primaryPax.Gender === 0} onChange={() => handlePrimaryPaxChange("Gender", 0)} /> Male</label>
+                                            <label className="flex items-center gap-1 text-xs cursor-pointer"><input type="radio" name="g" checked={primaryPax.Gender === 1} onChange={() => handlePrimaryPaxChange("Gender", 1)} /> Female</label>
                                         </div>
                                     </div>
                                 </div>
@@ -479,20 +559,8 @@ export default function SeatSelectionPage() {
                         {selectedSeats.length > 0 && (
                             <div className="space-y-3 pt-4 border-t border-gray-100">
                                 <h3 className="font-bold text-slate-900 text-sm">Contact Information</h3>
-                                <input 
-                                    type="email" 
-                                    placeholder="Email Address" 
-                                    className="w-full p-3 border border-gray-200 rounded-lg text-sm"
-                                    value={contactInfo.email}
-                                    onChange={(e) => setContactInfo({...contactInfo, email: e.target.value})}
-                                />
-                                <input 
-                                    type="tel" 
-                                    placeholder="Mobile Number" 
-                                    className="w-full p-3 border border-gray-200 rounded-lg text-sm"
-                                    value={contactInfo.mobile}
-                                    onChange={(e) => setContactInfo({...contactInfo, mobile: e.target.value})}
-                                />
+                                <input type="email" placeholder="Email Address" className="w-full p-3 border border-gray-200 rounded-lg text-sm" value={contactInfo.email} onChange={(e) => setContactInfo({...contactInfo, email: e.target.value})} />
+                                <input type="tel" placeholder="Mobile Number" className="w-full p-3 border border-gray-200 rounded-lg text-sm" value={contactInfo.mobile} onChange={(e) => setContactInfo({...contactInfo, mobile: e.target.value})} />
                             </div>
                         )}
                     </div>
@@ -502,17 +570,36 @@ export default function SeatSelectionPage() {
                             <span className="text-gray-500 text-sm">Total Amount</span>
                             <span className="text-3xl font-black text-slate-900">₹{calculateTotal().toFixed(2)}</span>
                         </div>
-                        <button 
-                            onClick={handleBookTicket}
-                            disabled={selectedSeats.length === 0}
-                            className={`w-full py-4 font-bold text-sm tracking-widest uppercase rounded-lg flex items-center justify-center gap-2 transition-all ${selectedSeats.length > 0 ? "bg-slate-900 text-white hover:bg-slate-800 shadow-lg cursor-pointer" : "bg-gray-200 text-gray-400 cursor-not-allowed"}`}
-                        >
+                        <button onClick={handleBookTicket} disabled={selectedSeats.length === 0} className={`w-full py-4 font-bold text-sm tracking-widest uppercase rounded-lg flex items-center justify-center gap-2 transition-all ${selectedSeats.length > 0 ? "bg-black text-white hover:bg-gray-800 shadow-lg cursor-pointer" : "bg-gray-200 text-gray-400 cursor-not-allowed"}`}>
                             Confirm Booking <CheckCircle size={18} />
                         </button>
                     </div>
                 </div>
             </div>
         </div>
+
+        {/* --- ALERT DIALOG --- */}
+        <AlertDialog open={isAlertOpen} onOpenChange={setIsAlertOpen}>
+            <AlertDialogContent className="bg-white rounded-xl shadow-2xl border-0">
+                <AlertDialogHeader>
+                    <AlertDialogTitle className={`flex items-center gap-2 text-xl ${alertConfig.type === 'success' ? 'text-green-600' : 'text-red-600'}`}>
+                        {alertConfig.type === 'success' ? <CheckCircle size={24} /> : <AlertCircle size={24} />}
+                        {alertConfig.title}
+                    </AlertDialogTitle>
+                    <AlertDialogDescription className="text-gray-600 text-base mt-2">
+                        {alertConfig.description}
+                    </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter className="mt-4">
+                    <AlertDialogAction 
+                        onClick={alertConfig.onConfirm}
+                        className="bg-black hover:bg-gray-800 text-white px-6"
+                    >
+                        Okay
+                    </AlertDialogAction>
+                </AlertDialogFooter>
+            </AlertDialogContent>
+        </AlertDialog>
     </div>
   );
 }

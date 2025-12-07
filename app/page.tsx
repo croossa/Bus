@@ -1,11 +1,13 @@
-import Footer from "@/components/Footer"
+import Features from "@/components/Features"
 import Hero from "@/components/Hero"
-import Navbar from "@/components/Navbar"
+import PopularDestinations from "@/components/Populer"
 
 const Home = () => {
   return (
     <div>
       <Hero />
+      <PopularDestinations />
+      <Features />
     </div>
   )
 }

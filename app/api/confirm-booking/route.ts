@@ -4,16 +4,24 @@ import crypto from "crypto";
 export async function POST(req: NextRequest) {
   try {
     // 1. Get Secrets
-    const busUrl = process.env.API_URL;
+    // Expecting API_URL like: http://uat.etrav.in/BusHost/BusAPIService.svc/JSONService
+    const busApiUrl = process.env.API_URL; 
     const busUser = process.env.BUS_API_USER_ID;
     const busPwd = process.env.BUS_API_PASSWORD;
     const razorpaySecret = process.env.RAZORPAY_KEY_SECRET;
 
-    if (!busUrl || !busUser || !razorpaySecret) {
+    if (!busApiUrl || !busUser || !razorpaySecret) {
       return NextResponse.json({ msg: "Server configuration missing" }, { status: 500 });
     }
 
-    // 2. Get Data from Frontend
+    // 2. Construct Trade API URL (Swap 'BusHost/BusAPIService' with 'tradehost/TradeAPIService')
+    // This handles the different endpoint structure you provided.
+    const tradeApiUrl = busApiUrl.replace(
+        "BusHost/BusAPIService.svc", 
+        "tradehost/TradeAPIService.svc"
+    );
+
+    // 3. Get Data from Frontend
     const body = await req.json();
     const { 
         busOrderKey, 
@@ -23,13 +31,7 @@ export async function POST(req: NextRequest) {
         amount 
     } = body;
 
-    if (!busOrderKey || !razorpayPaymentId || !razorpaySignature) {
-        return NextResponse.json({ msg: "Missing payment details" }, { status: 400 });
-    }
-
-    // ---------------------------------------------------------
-    // STEP A: VERIFY RAZORPAY SIGNATURE
-    // ---------------------------------------------------------
+    // 4. Verify Razorpay Signature
     const bodyData = razorpayOrderId + "|" + razorpayPaymentId;
     const expectedSignature = crypto
       .createHmac("sha256", razorpaySecret)
@@ -41,30 +43,30 @@ export async function POST(req: NextRequest) {
        return NextResponse.json({ msg: "Invalid Payment Signature" }, { status: 400 });
     }
 
-    console.log("✅ Payment Signature Verified. Proceeding to Bus API...");
+    console.log("✅ Payment Verified. Step 1: Adding Payment to Trade API...");
 
     // ---------------------------------------------------------
-    // STEP B: CALL ADD PAYMENT (Bus_AddPayment)
+    // STEP 1: CALL ADD PAYMENT (Trade API)
     // ---------------------------------------------------------
-    // FIX: Changed from '/AddPayment' to '/Bus_AddPayment' to match API pattern
-    const addPaymentUrl = `${busUrl}/AddPayment`; 
+    const addPaymentEndpoint = `${tradeApiUrl}/AddPayment`;
 
     const paymentPayload = {
         Auth_Header: {
             UserId: busUser,
             Password: busPwd,
-            Request_Id: `Pay_${Date.now()}_${Math.floor(Math.random() * 100)}`,
-            IP_Address: "127.0.0.1", 
+            Request_Id: `Pay_${Date.now()}`,
+            IP_Address: "127.0.0.1",
             IMEI_Number: "123456789"
         },
-        Order_Key: busOrderKey,
-        Payment_Type: "1", 
-        Reference_Number: razorpayPaymentId,
-        Total_Amount: String(amount),
-        Currency: "INR"
+        ClientRefNo: razorpayPaymentId, // Using Razorpay ID as Client Ref
+        RefNo: busOrderKey,             // The Temp Booking Key
+        TransactionType: 0,             // 0 for Booking
+        ProductId: "2"                  // 2 for Bus
     };
 
-    const paymentRes = await fetch(addPaymentUrl, {
+    console.log("Calling Trade API:", addPaymentEndpoint);
+    
+    const paymentRes = await fetch(addPaymentEndpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(paymentPayload)
@@ -76,42 +78,41 @@ export async function POST(req: NextRequest) {
     try {
         paymentData = JSON.parse(paymentResText);
     } catch (e) {
-        console.error("❌ Bus_AddPayment returned HTML/XML:", paymentResText);
+        console.error("❌ AddPayment Returned XML/HTML:", paymentResText);
         return NextResponse.json({ 
-            msg: "Bus API Error (AddPayment failed)", 
+            msg: "Trade API Error (AddPayment failed)", 
             debug: paymentResText.substring(0, 200) 
         }, { status: 500 });
     }
 
+    // Check if AddPayment was successful
     if (paymentData.Response_Header?.Error_Code !== "0000") {
          console.error("AddPayment Failed:", paymentData);
          return NextResponse.json({ 
-             msg: "Payment Recording Failed on Bus Network", 
+             msg: "Payment Recording Failed (Trade API)", 
              error: paymentData.Response_Header?.Error_Desc 
          }, { status: 400 });
     }
 
-    console.log("✅ Payment Recorded. Finalizing Ticket...");
+    console.log("✅ Payment Recorded. Step 2: Finalizing Ticket...");
 
     // ---------------------------------------------------------
-    // STEP C: CALL FINAL TICKETING (Bus_Ticketing)
+    // STEP 2: CALL BUS TICKETING (Bus API)
     // ---------------------------------------------------------
-    // FIX: Changed from '/BusTicketing' to '/Bus_Ticketing' to match API pattern
-    // (If this fails with 404 next time, change it back, but this is the likely correct name)
-    const ticketUrl = `${busUrl}/Bus_Ticketing`; 
+    const ticketEndpoint = `${busApiUrl}/Bus_Ticketing`;
 
     const ticketPayload = {
         Auth_Header: {
             UserId: busUser,
             Password: busPwd,
-            Request_Id: `Ticket_${Date.now()}_${Math.floor(Math.random() * 100)}`,
+            Request_Id: `Ticket_${Date.now()}`,
             IP_Address: "127.0.0.1",
             IMEI_Number: "123456789"
         },
-        Order_Key: busOrderKey
+        Booking_RefNo: busOrderKey // Using the same key
     };
 
-    const ticketRes = await fetch(ticketUrl, {
+    const ticketRes = await fetch(ticketEndpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(ticketPayload)
@@ -133,12 +134,12 @@ export async function POST(req: NextRequest) {
     if (ticketData.Response_Header?.Error_Code !== "0000") {
          console.error("Final Ticketing Failed:", ticketData);
          return NextResponse.json({ 
-             msg: "Booking Failed (Money deducted but ticket not booked)", 
+             msg: "Booking Failed (Money deducted but ticket not generated)", 
              error: ticketData.Response_Header?.Error_Desc 
          }, { status: 400 });
     }
 
-    console.log("🎉 Booking Confirmed! PNR:", ticketData.TicketNo || ticketData.PNR);
+    console.log("🎉 Booking Confirmed! PNR:", ticketData.TicketNo || ticketData.Transport_PNR);
 
     return NextResponse.json({ 
         msg: "Success", 
@@ -158,7 +159,6 @@ export async function POST(req: NextRequest) {
 
 // export async function POST(req: NextRequest) {
 //   try {
-//     // 1. Get Secrets
 //     const busUrl = process.env.API_URL;
 //     const busUser = process.env.BUS_API_USER_ID;
 //     const busPwd = process.env.BUS_API_PASSWORD;
@@ -168,10 +168,9 @@ export async function POST(req: NextRequest) {
 //       return NextResponse.json({ msg: "Server configuration missing" }, { status: 500 });
 //     }
 
-//     // 2. Get Data from Frontend
 //     const body = await req.json();
 //     const { 
-//         busOrderKey, 
+//         busOrderKey, // This contains the Temp Booking ID
 //         razorpayPaymentId, 
 //         razorpayOrderId, 
 //         razorpaySignature
@@ -181,9 +180,7 @@ export async function POST(req: NextRequest) {
 //         return NextResponse.json({ msg: "Missing payment details" }, { status: 400 });
 //     }
 
-//     // ---------------------------------------------------------
-//     // STEP A: VERIFY RAZORPAY SIGNATURE (Security Check)
-//     // ---------------------------------------------------------
+//     // 1. Verify Signature
 //     const bodyData = razorpayOrderId + "|" + razorpayPaymentId;
 //     const expectedSignature = crypto
 //       .createHmac("sha256", razorpaySecret)
@@ -197,10 +194,7 @@ export async function POST(req: NextRequest) {
 
 //     console.log("✅ Payment Verified. Proceeding to Final Ticketing...");
 
-//     // ---------------------------------------------------------
-//     // STEP B: CALL BUS TICKETING (Directly)
-//     // ---------------------------------------------------------
-//     // Endpoint from your list: /Bus_Ticketing
+//     // 2. Call Bus Ticketing
 //     const ticketUrl = `${busUrl}/Bus_Ticketing`; 
 
 //     const ticketPayload = {
@@ -211,11 +205,10 @@ export async function POST(req: NextRequest) {
 //             IP_Address: "127.0.0.1",
 //             IMEI_Number: "123456789"
 //         },
-//         Order_Key: busOrderKey,
-//         // Some APIs require the payment ID as a reference here, check if "RefNo" is needed.
-//         // If not, just Order_Key is usually enough for this provider.
-//         RefNo: razorpayPaymentId 
+//         Booking_RefNo: busOrderKey 
 //     };
+    
+//     console.log("Sending Ticketing Payload:", JSON.stringify(ticketPayload, null, 2));
 
 //     const ticketRes = await fetch(ticketUrl, {
 //         method: "POST",
