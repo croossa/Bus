@@ -11,12 +11,16 @@ export async function POST(req: NextRequest) {
     }
 
     const body = await req.json();
-    const { Order_Key, RefNo } = body; 
+    
+    // FIX: Changed input to match the API documentation directly
+    const { Booking_RefNo } = body; 
 
-    // According to docs, Order_Key is mandatory to check status
-    if (!Order_Key) {
-        return NextResponse.json({ msg: "Order Key is required" }, { status: 400 });
+    if (!Booking_RefNo) {
+        return NextResponse.json({ msg: "Booking_RefNo is required" }, { status: 400 });
     }
+
+    // DEBUG LOG: Request Start
+    console.log(`🔍 Checking Status for Booking Ref: ${Booking_RefNo}...`);
 
     const apiResponse = await fetch(`${url}/Bus_Requery`, {
         method: "POST",
@@ -29,8 +33,7 @@ export async function POST(req: NextRequest) {
                 IP_Address: "127.0.0.1", 
                 IMEI_Number: "123456789"
             },
-            Order_Key: Order_Key,
-            RefNo: RefNo || "" // Optional Payment Reference
+            Booking_RefNo: Booking_RefNo
         }),
     });
 
@@ -40,13 +43,17 @@ export async function POST(req: NextRequest) {
 
     try {
         data = JSON.parse(responseText);
+        // DEBUG LOG: Response Success
+        console.log("✅ Bus_Requery Response:", JSON.stringify(data, null, 2));
     } catch (e) {
+        console.error("❌ Bus_Requery Failed (Invalid JSON):", responseText);
         return NextResponse.json({ msg: "API Error (Invalid JSON)", debug: responseText }, { status: 500 });
     }
 
     return NextResponse.json({ msg: "Success", data }, { status: 200 });
 
   } catch (error: any) {
+    console.error("❌ Check Status Server Error:", error);
     return NextResponse.json({ msg: "Server Error", error: error.message }, { status: 500 });
   }
 }

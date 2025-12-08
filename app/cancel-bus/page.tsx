@@ -4,7 +4,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import Image from "next/image";
 import bgImage from "@/public/assets/searchHeader.jpg"; 
-import { ArrowLeft, Ticket, CheckCircle, AlertCircle, Loader2, IndianRupee, Info } from "lucide-react";
+import { ArrowLeft, Ticket, CheckCircle, AlertCircle, Loader2, IndianRupee, Info, Bus, Calendar, Clock, MapPin } from "lucide-react";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -19,7 +19,7 @@ export default function CancelTicketPage() {
   const router = useRouter();
 
   // --- STATE ---
-  const [orderKey, setOrderKey] = useState(""); 
+  const [bookingRefNo, setBookingRefNo] = useState(""); 
   const [loading, setLoading] = useState(false);
   const [step, setStep] = useState<"input" | "details" | "review" | "success">("input");
   
@@ -40,88 +40,181 @@ export default function CancelTicketPage() {
     setIsAlertOpen(true);
   };
 
-  // --- LOGIC: FETCH BOOKING ---
+  // --- HELPER: GET SEATS FOR CANCELLATION ---
+  const getSeatsList = () => {
+    if (!bookingDetails) return [];
+    
+    const rootPNR = bookingDetails.Transport_PNR || "";
+    
+    // 1. Check if API gave us a ready-made list
+    if (bookingDetails.CancelTicket_Details) {
+        return bookingDetails.CancelTicket_Details;
+    } 
+    // 2. Check for PAX_Details
+    else if (bookingDetails.PAX_Details && Array.isArray(bookingDetails.PAX_Details)) {
+        return bookingDetails.PAX_Details.map((pax: any) => ({
+            Seat_Number: pax.Seat_Number,
+            Ticket_Number: pax.Ticket_Number,
+            Transport_PNR: pax.Transport_PNR || rootPNR 
+        }));
+    } 
+    // 3. Fallback for PaxList
+    else if (bookingDetails.PaxList && Array.isArray(bookingDetails.PaxList)) {
+        return bookingDetails.PaxList.map((pax: any) => ({
+            Seat_Number: pax.SeatNo || pax.Seat_Number,
+            Ticket_Number: pax.TicketNo || pax.Ticket_Number,
+            Transport_PNR: pax.PNR || pax.Transport_PNR || rootPNR
+        }));
+    }
+    return [];
+  };
+
+  // --- STEP 1: FETCH BOOKING DETAILS ---
   const handleGetDetails = async () => {
-    if (!orderKey.trim()) {
-      triggerAlert("Missing Info", "Please enter your Ticket Number (Order Key).");
+    if (!bookingRefNo.trim()) {
+      triggerAlert("Missing Info", "Please enter your Booking Reference Number.");
       return;
     }
 
     setLoading(true);
 
     try {
-      const response = await fetch("/api/check-status", {
+      const response = await fetch("/api/status", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ Order_Key: orderKey }) 
+        body: JSON.stringify({ Booking_RefNo: bookingRefNo }) 
       });
 
       const result = await response.json();
 
-      if (!response.ok || !result.data) throw new Error(result.msg || "Booking not found.");
+      if (!response.ok || !result.data) {
+        throw new Error(result.msg || "Booking not found.");
+      }
+
+      const booking = result.data.GetBookingDetails || result.data; 
       
-      const booking = result.data.GetBookingDetails || result.data;
       if (!booking) throw new Error("Invalid booking data received.");
 
       setBookingDetails(booking);
       setStep("details");
 
     } catch (error: any) {
+      console.error(error);
       triggerAlert("Not Found", error.message || "Could not find booking details.");
     } finally {
       setLoading(false);
     }
   };
 
-  // --- LOGIC: CALCULATE REFUND ---
+  // --- STEP 2: CALCULATE REFUND ---
   const handleCheckRefund = async () => {
     setLoading(true);
+
     try {
-      const seatsToCancel = bookingDetails.CancelTicket_Details || []; 
-      const response = await fetch("/api/cancellation-charge", {
+      const seatsToCancel = getSeatsList();
+      
+      if (seatsToCancel.length === 0) {
+         throw new Error("Could not find seat details to cancel.");
+      }
+
+      const payload = {
+        Booking_RefNo: bookingRefNo,
+        CancelTicket_Details: seatsToCancel
+      };
+
+      const response = await fetch("/api/cancellationcharge", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ Booking_RefNo: orderKey, CancelTicket_Details: seatsToCancel }) 
+        body: JSON.stringify(payload) 
       });
 
       const result = await response.json();
-      if (!response.ok || result.error) throw new Error(result.error || "Failed to calculate refund.");
 
-      setRefundInfo(result.data);
+      if (!response.ok || result.error) {
+        throw new Error(result.error || "Failed to calculate refund.");
+      }
+
+      // --- FIX: CALCULATE FROM JSON RESPONSE ---
+      const chargeData = result.data;
+
+      // 1. Get Total Paid from Booking Details
+      let totalFare = 0;
+      if (bookingDetails.BookingPaymentDetails && bookingDetails.BookingPaymentDetails.length > 0) {
+          totalFare = Number(bookingDetails.BookingPaymentDetails[0].Payment_Amount);
+      } else {
+          totalFare = 0; // Fallback
+      }
+
+      // 2. Sum up Cancellation Charges
+      let cancelCharges = 0;
+      if (chargeData.CancellationPenaltyValues && Array.isArray(chargeData.CancellationPenaltyValues)) {
+          cancelCharges = chargeData.CancellationPenaltyValues.reduce((sum: number, item: any) => sum + Number(item.Cancellation_Penalty), 0);
+      }
+      // Add service charge if any
+      cancelCharges += Number(chargeData.ServiceCharge || 0);
+
+      // 3. Refund Amount
+      const refundAmount = totalFare - cancelCharges;
+
+      setRefundInfo({
+        TotalFare: totalFare,
+        CancellationCharge: cancelCharges,
+        RefundAmount: refundAmount,
+        CancellationCharge_Key: chargeData.CancellationCharge_Key
+      });
+
       setStep("review");
 
     } catch (error: any) {
+      console.error(error);
       triggerAlert("Error", "Could not calculate refund. " + error.message);
     } finally {
       setLoading(false);
     }
   };
 
-  // --- LOGIC: CONFIRM CANCEL ---
+  // --- STEP 3: CONFIRM CANCEL (UPDATED API URL) ---
   const handleConfirmCancel = async () => {
     setLoading(true);
+
     try {
-      const seatsToCancel = bookingDetails.CancelTicket_Details || []; 
-      const response = await fetch("/api/cancel-ticket", {
+      const seatsToCancel = getSeatsList();
+
+      const payload = {
+        Booking_RefNo: bookingRefNo,
+        BusTicketstoCancel: seatsToCancel,
+        CancellationCharge_Key: refundInfo.CancellationCharge_Key || ""
+      };
+
+      // FIX: Changed from '/api/cancel-ticket' to '/api/cancellation' as requested
+      const response = await fetch("/api/cancellation", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-           Booking_RefNo: orderKey,
-           BusTicketstoCancel: seatsToCancel,
-           CancellationCharge_Key: refundInfo.CancellationCharge_Key || ""
-        })
+        body: JSON.stringify(payload)
       });
 
       const result = await response.json();
-      if (!response.ok || result.msg !== "Success") throw new Error(result.error || "Cancellation failed.");
+
+      if (!response.ok || result.msg !== "Success") {
+        throw new Error(result.error || result.msg || "Cancellation failed.");
+      }
 
       setStep("success");
 
     } catch (error: any) {
+      console.error(error);
       triggerAlert("Cancellation Failed", error.message || "Unable to cancel ticket.", "error");
     } finally {
       setLoading(false);
     }
+  };
+
+  // --- HELPER: STATUS COLOR ---
+  const getStatusColor = (status: string) => {
+    const s = status?.toLowerCase() || "";
+    if (s.includes("confirm")) return "text-green-600 bg-green-50 border-green-200";
+    if (s.includes("cancel")) return "text-red-600 bg-red-50 border-red-200";
+    return "text-yellow-600 bg-yellow-50 border-yellow-200";
   };
 
   return (
@@ -129,14 +222,7 @@ export default function CancelTicketPage() {
       
       {/* 1. HERO BACKGROUND */}
       <div className="fixed inset-0 z-0">
-        <Image 
-            src={bgImage} 
-            alt="Background" 
-            fill 
-            quality={100} 
-            style={{ objectFit: "cover" }} 
-            className="opacity-90"
-        />
+        <Image src={bgImage} alt="Background" fill quality={100} style={{ objectFit: "cover" }} className="opacity-90" />
         <div className="absolute inset-0 bg-black/70" />
       </div>
 
@@ -155,18 +241,12 @@ export default function CancelTicketPage() {
         <div className="h-[45vh] w-full bg-transparent"></div>
 
         <div className="w-full bg-slate-50 min-h-screen flex flex-col items-center pb-20 rounded-t-[3rem] shadow-[0_-10px_40px_rgba(0,0,0,0.2)]">
-          
           <div className="w-full max-w-2xl px-6 py-16">
             
-            {/* BACK BUTTON */}
-            <button 
-                onClick={() => router.push("/")} 
-                className="mb-10 flex items-center gap-2 text-gray-500 hover:text-black transition-colors font-medium"
-            >
+            <button onClick={() => router.push("/")} className="mb-10 flex items-center gap-2 text-gray-500 hover:text-black transition-colors font-medium">
                 <ArrowLeft size={18} /> Back to Home
             </button>
 
-            {/* MAIN CARD */}
             <div className="bg-white p-8 rounded-2xl shadow-xl border border-gray-100 transition-all">
                 
                 {/* --- STEP 1: INPUT --- */}
@@ -177,21 +257,17 @@ export default function CancelTicketPage() {
                                 <Ticket size={32} />
                             </div>
                             <h2 className="text-2xl font-bold text-slate-900">Find Booking</h2>
-                            <p className="text-gray-500 mt-1">Enter your Ticket Number (Order Key) to proceed</p>
+                            <p className="text-gray-500 mt-1">Enter your Booking Reference Number to proceed</p>
                         </div>
                         <div className="flex flex-col gap-4">
                             <input 
                                 type="text" 
-                                placeholder="Order Key (e.g. 176495...)" 
-                                value={orderKey}
-                                onChange={(e) => setOrderKey(e.target.value)}
+                                placeholder="Booking Ref No (e.g. BBB7CI9X)" 
+                                value={bookingRefNo}
+                                onChange={(e) => setBookingRefNo(e.target.value)}
                                 className="w-full p-4 border border-gray-200 rounded-lg text-lg focus:outline-none focus:border-black transition-colors bg-gray-50"
                             />
-                            <button 
-                                onClick={handleGetDetails}
-                                disabled={loading}
-                                className="w-full bg-black text-white py-4 rounded-lg font-bold uppercase tracking-widest hover:bg-gray-800 transition-all flex items-center justify-center gap-2 disabled:opacity-50 mt-2"
-                            >
+                            <button onClick={handleGetDetails} disabled={loading} className="w-full bg-black text-white py-4 rounded-lg font-bold uppercase tracking-widest hover:bg-gray-800 transition-all flex items-center justify-center gap-2 disabled:opacity-50 mt-2">
                                 {loading ? <Loader2 className="animate-spin" /> : "Find Ticket"}
                             </button>
                         </div>
@@ -201,30 +277,91 @@ export default function CancelTicketPage() {
                 {/* --- STEP 2: DETAILS --- */}
                 {step === "details" && bookingDetails && (
                     <div className="animate-in fade-in slide-in-from-bottom-4 duration-300">
-                        <h2 className="text-xl font-bold text-slate-900 mb-4">Ticket Found</h2>
-                        <div className="bg-gray-50 p-6 rounded-xl border border-gray-100 mb-6 space-y-3">
-                            <div className="flex justify-between">
-                                <span className="text-gray-500 text-sm">Route</span>
-                                <span className="font-bold text-slate-900 text-right">{bookingDetails.Source} <span className="text-[#ceb45f]">→</span> {bookingDetails.Destination}</span>
+                        <div className="flex items-center justify-between mb-6">
+                             <h2 className="text-xl font-bold text-slate-900">Ticket Details</h2>
+                             <span className={`px-3 py-1 rounded-full text-xs font-bold border uppercase ${getStatusColor(bookingDetails.Ticket_Status_Desc)}`}>
+                                 {bookingDetails.Ticket_Status_Desc || "Status Unknown"}
+                             </span>
+                        </div>
+                        
+                        <div className="bg-gray-50 p-6 rounded-xl border border-gray-200 mb-6 space-y-4">
+                            
+                            {/* Route */}
+                            <div className="flex justify-between items-center border-b border-gray-200 pb-4">
+                                <div>
+                                    <p className="text-xs text-gray-500 font-bold uppercase">From</p>
+                                    <p className="font-bold text-slate-900 text-lg">{bookingDetails.Bus_Detail?.From_City || bookingDetails.Source || "Origin"}</p>
+                                </div>
+                                <ArrowLeft className="text-gray-400 rotate-180" size={20} />
+                                <div className="text-right">
+                                    <p className="text-xs text-gray-500 font-bold uppercase">To</p>
+                                    <p className="font-bold text-slate-900 text-lg">{bookingDetails.Bus_Detail?.To_City || bookingDetails.Destination || "Destination"}</p>
+                                </div>
                             </div>
-                            <div className="flex justify-between">
-                                <span className="text-gray-500 text-sm">Travel Date</span>
-                                <span className="font-bold text-slate-900">{bookingDetails.TravelDate}</span>
+
+                            {/* Operator & Bus Type */}
+                            <div>
+                                <p className="text-xs text-gray-500 font-bold uppercase">Operator</p>
+                                <p className="font-bold text-slate-900">{bookingDetails.Bus_Detail?.Operator_Name || "Operator Name"}</p>
+                                <p className="text-xs text-gray-600 mt-1">{bookingDetails.Bus_Detail?.Bus_Type || "Bus Type"}</p>
                             </div>
-                            <div className="flex justify-between">
-                                <span className="text-gray-500 text-sm">Seats</span>
-                                <span className="font-bold text-slate-900">
-                                    {bookingDetails.CancelTicket_Details?.map((s:any) => s.Seat_Number).join(", ")}
+
+                            {/* Date & Time */}
+                            <div className="grid grid-cols-2 gap-4">
+                                <div className="flex items-center gap-2">
+                                    <Calendar size={16} className="text-[#ceb45f]" />
+                                    <div>
+                                        <p className="text-xs text-gray-500 font-bold uppercase">Date</p>
+                                        <p className="font-bold text-slate-900 text-sm">{bookingDetails.Bus_Detail?.TravelDate || "N/A"}</p>
+                                    </div>
+                                </div>
+                                <div className="flex items-center gap-2">
+                                    <Clock size={16} className="text-[#ceb45f]" />
+                                    <div>
+                                        <p className="text-xs text-gray-500 font-bold uppercase">Time</p>
+                                        <p className="font-bold text-slate-900 text-sm">{bookingDetails.Bus_Detail?.Departure_Time || "N/A"}</p>
+                                    </div>
+                                </div>
+                            </div>
+
+                            {/* PNR & Ref */}
+                            <div className="grid grid-cols-2 gap-4 pt-2 border-t border-gray-200">
+                                <div>
+                                    <p className="text-xs text-gray-500 font-bold uppercase">Transport PNR</p>
+                                    <p className="font-mono text-slate-900 font-bold">{bookingDetails.Transport_PNR || "N/A"}</p>
+                                </div>
+                                <div>
+                                    <p className="text-xs text-gray-500 font-bold uppercase">Booking Ref</p>
+                                    <p className="font-mono text-slate-900 font-bold">{bookingDetails.Booking_RefNo}</p>
+                                </div>
+                            </div>
+
+                            {/* Seats */}
+                            <div className="flex items-center gap-2 bg-white p-3 rounded-lg border border-gray-200">
+                                <MapPin size={16} className="text-gray-400" />
+                                <span className="text-sm font-bold text-slate-700">Seat(s):</span>
+                                <span className="text-sm font-black text-slate-900">
+                                    {bookingDetails.PAX_Details?.map((p:any) => p.Seat_Number).join(", ") || 
+                                     bookingDetails.PaxList?.map((p:any) => p.SeatNo).join(", ") || "N/A"}
                                 </span>
                             </div>
+
                         </div>
-                        <button 
-                            onClick={handleCheckRefund}
-                            disabled={loading}
-                            className="w-full bg-black text-white py-4 rounded-lg font-bold uppercase tracking-widest hover:bg-gray-800 transition-all flex items-center justify-center gap-2"
-                        >
-                            {loading ? <Loader2 className="animate-spin" /> : "Calculate Refund"}
-                        </button>
+
+                        {/* Only show Cancel button if ticket is Confirmed */}
+                        {bookingDetails.Ticket_Status_Desc?.toLowerCase() === "confirmed" ? (
+                            <button 
+                                onClick={handleCheckRefund}
+                                disabled={loading}
+                                className="w-full bg-black text-white py-4 rounded-lg font-bold uppercase tracking-widest hover:bg-gray-800 transition-all flex items-center justify-center gap-2"
+                            >
+                                {loading ? <Loader2 className="animate-spin" /> : "Calculate Refund & Cancel"}
+                            </button>
+                        ) : (
+                            <div className="text-center p-4 bg-gray-100 rounded-lg text-gray-500 text-sm">
+                                This ticket cannot be cancelled (Status: {bookingDetails.Ticket_Status_Desc})
+                            </div>
+                        )}
                     </div>
                 )}
 
@@ -251,7 +388,7 @@ export default function CancelTicketPage() {
                             </div>
                         </div>
                         <div className="flex gap-3">
-                            <button onClick={() => setStep("input")} className="flex-1 py-4 border border-gray-200 rounded-lg font-bold text-gray-600 hover:bg-gray-50 transition-colors uppercase text-sm">Cancel</button>
+                            <button onClick={() => setStep("details")} className="flex-1 py-4 border border-gray-200 rounded-lg font-bold text-gray-600 hover:bg-gray-50 transition-colors uppercase text-sm">Back</button>
                             <button onClick={handleConfirmCancel} disabled={loading} className="flex-[2] bg-red-600 text-white py-4 rounded-lg font-bold uppercase hover:bg-red-700 flex items-center justify-center gap-2 disabled:opacity-50 shadow-md">
                                 {loading ? <Loader2 className="animate-spin" /> : "Confirm Cancellation"}
                             </button>
@@ -267,7 +404,7 @@ export default function CancelTicketPage() {
                         </div>
                         <h2 className="text-3xl font-black text-slate-900 mb-2">Cancelled!</h2>
                         <p className="text-gray-600 mb-8 leading-relaxed">
-                            Your ticket <strong>{orderKey}</strong> has been cancelled successfully. 
+                            Your ticket <strong>{bookingRefNo}</strong> has been cancelled successfully. 
                             <br/>The refund will be credited to your account within 5-7 working days.
                         </p>
                         <button onClick={() => router.push("/")} className="w-full bg-black text-white py-4 rounded-lg font-bold uppercase tracking-widest hover:bg-gray-800 transition-all">
@@ -278,7 +415,6 @@ export default function CancelTicketPage() {
 
             </div>
             
-            {/* Info Note */}
             {step === "input" && (
                 <div className="mt-8 p-4 bg-yellow-50 border border-yellow-200 rounded-lg text-xs text-yellow-800 flex items-start gap-3">
                     <Info size={16} className="mt-0.5 shrink-0"/>
@@ -298,14 +434,10 @@ export default function CancelTicketPage() {
                     {alertConfig.type === 'success' ? <CheckCircle size={24} /> : <AlertCircle size={24} />}
                     {alertConfig.title}
                 </AlertDialogTitle>
-                <AlertDialogDescription className="text-gray-600 text-base mt-2">
-                    {alertConfig.description}
-                </AlertDialogDescription>
+                <AlertDialogDescription className="text-gray-600 text-base mt-2">{alertConfig.description}</AlertDialogDescription>
             </AlertDialogHeader>
             <AlertDialogFooter className="mt-4">
-                <AlertDialogAction onClick={alertConfig.onConfirm} className="bg-black hover:bg-gray-800 text-white px-6">
-                    Okay
-                </AlertDialogAction>
+                <AlertDialogAction onClick={alertConfig.onConfirm} className="bg-black hover:bg-gray-800 text-white px-6">Okay</AlertDialogAction>
             </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>

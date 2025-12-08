@@ -123,6 +123,7 @@ export async function POST(req: NextRequest) {
 
     try {
         ticketData = JSON.parse(ticketResText);
+        console.log(ticketData)
     } catch (e) {
         console.error("❌ Bus_Ticketing returned HTML/XML:", ticketResText);
         return NextResponse.json({ 
