@@ -78,7 +78,6 @@ function SearchBox() {
   });
 
   useEffect(() => {
-    // Calculate Today's Date in Local Timezone
     const dt = new Date();
     const year = dt.getFullYear();
     const month = String(dt.getMonth() + 1).padStart(2, "0");
@@ -92,7 +91,6 @@ function SearchBox() {
   };
 
   const handleSearch = () => {
-    // 1. CHECK MISSING FIELDS SPECIFICALLY
     const missingFields = [];
     if (!from) missingFields.push("Origin City");
     if (!to) missingFields.push("Destination City");
@@ -106,7 +104,6 @@ function SearchBox() {
       return;
     }
 
-    // 2. CHECK IF CITIES EXIST IN DATABASE (Case Insensitive)
     const isValidCity = (cityInput: string) => {
       return ALL_CITIES.some(
         (c: string) => c.toLowerCase() === cityInput.toLowerCase().trim()
@@ -116,7 +113,7 @@ function SearchBox() {
     if (!isValidCity(from)) {
       triggerAlert(
         "Invalid Origin City", 
-        `"${from}" is not a valid city in our network. Please select a city from the suggestions list.`
+        `"${from}" is not a valid city. Please select from the list.`
       );
       return;
     }
@@ -124,52 +121,50 @@ function SearchBox() {
     if (!isValidCity(to)) {
       triggerAlert(
         "Invalid Destination City", 
-        `"${to}" is not a valid city in our network. Please select a city from the suggestions list.`
+        `"${to}" is not a valid city. Please select from the list.`
       );
       return;
     }
 
-    // 3. CHECK SAME CITY ERROR
     if (from.toLowerCase().trim() === to.toLowerCase().trim()) {
       triggerAlert(
         "Invalid Route", 
-        "Source and Destination cities cannot be the same. Please choose a different destination."
+        "Source and Destination cities cannot be the same."
       );
       return;
     }
 
-    // 4. CHECK DATE VALIDITY (Past Date)
     if (date < minDate) {
       triggerAlert(
         "Incorrect Date", 
-        "The selected travel date is in the past. Please select today or a future date."
+        "The selected travel date is in the past."
       );
       return;
     }
 
-    // 5. CHECK SECRET KEY (System Error)
     const secretKey = process.env.NEXT_PUBLIC_SECRET_KEY;
     if (!secretKey) {
-      console.error("❌ CRITICAL ERROR: NEXT_PUBLIC_SECRET_KEY is missing in .env.local");
-      triggerAlert("System Error", "Encryption configuration is missing. Please contact support.");
+      triggerAlert("System Error", "Encryption configuration is missing.");
       return;
     }
 
-    // 6. PROCEED
     try {
-      // Find the exact casing from the list to ensure consistency
       const exactFrom = ALL_CITIES.find((c: string) => c.toLowerCase() === from.toLowerCase().trim()) || from;
       const exactTo = ALL_CITIES.find((c: string) => c.toLowerCase() === to.toLowerCase().trim()) || to;
 
       const payload = { from: exactFrom, to: exactTo, date };
       const jsonString = JSON.stringify(payload);
+      
       const encrypted = CryptoJS.AES.encrypt(jsonString, secretKey).toString();
+      
+      // FIX: Use encodeURIComponent and send as QUERY PARAM
       const encoded = encodeURIComponent(encrypted);
       
-      router.push(`/buses/${encoded}`);
+      router.push(`/buses?search=${encoded}`);
+      
     } catch (error) {
       console.error("Encryption failed:", error);
-      triggerAlert("Processing Error", "An unexpected error occurred while processing your request.");
+      triggerAlert("Processing Error", "An error occurred.");
     }
   };
 
@@ -177,7 +172,6 @@ function SearchBox() {
     <>
       <div className="bg-white rounded-2xl shadow-xl flex flex-col md:flex-row items-center p-6 gap-4 lg:gap-6 relative">
         
-        {/* FROM */}
         <div className="flex flex-col w-full relative z-30">
           <CityAutocomplete
             label="From"
@@ -187,7 +181,6 @@ function SearchBox() {
           />
         </div>
 
-        {/* TO */}
         <div className="flex flex-col w-full relative z-20">
           <CityAutocomplete
             label="To"
@@ -197,7 +190,6 @@ function SearchBox() {
           />
         </div>
 
-        {/* DATE */}
         <div className="flex flex-col w-full">
           <label className="text-gray-500 text-sm flex items-center gap-2 mb-1 whitespace-nowrap">
             <Calendar size={16} style={{ color: "#ceb45f" }} />
@@ -223,7 +215,6 @@ function SearchBox() {
         </div>
       </div>
 
-      {/* DYNAMIC ALERT DIALOG */}
       <AlertDialog open={isAlertOpen} onOpenChange={setIsAlertOpen}>
         <AlertDialogContent className="bg-white rounded-xl shadow-2xl border-0">
           <AlertDialogHeader>
@@ -236,7 +227,6 @@ function SearchBox() {
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter className="mt-4">
-            {/* CHANGED TO BLACK */}
             <AlertDialogAction 
               onClick={() => setIsAlertOpen(false)}
               className="bg-black hover:bg-gray-800 text-white px-6"
@@ -271,7 +261,6 @@ function CityAutocomplete({
   useEffect(() => {
     if (value.length > 1 && showSuggestions) {
       const lowerValue = value.toLowerCase();
-      // Added trimming to ensure "Bangalore " matches "Bangalore"
       const filtered = ALL_CITIES.filter((city: string) =>
         city.toLowerCase().startsWith(lowerValue.trim())
       ).slice(0, 10);
