@@ -2,7 +2,7 @@
 
 import { useParams, useRouter } from "next/navigation";
 import CryptoJS from "crypto-js";
-import { useEffect, useState, useMemo } from "react";
+import React, { useEffect, useState, useMemo, Suspense } from "react";
 import Image from "next/image";
 import bgImage from "@/public/assets/searchHeader.jpg";
 import { MapPin, Calendar, ArrowRight, Bus as BusIcon, Wifi, Coffee, ChevronDown, AlertCircle, Filter, X, ArrowUpDown } from "lucide-react";
@@ -47,7 +47,8 @@ const calculateDuration = (start: string, end: string) => {
   return `${h}h ${m}m`;
 };
 
-export default function Page() {
+// --- INNER COMPONENT (CONTAINS LOGIC) ---
+function BusListingContent() {
   const primaryColor = "#ceb45f"; 
   const { id } = useParams();
   const router = useRouter();
@@ -196,7 +197,6 @@ export default function Page() {
       setFilters(prev => ({ ...prev, [key]: !prev[key] }));
   };
 
-  // --- ADDED THIS FUNCTION BACK ---
   const handleLoadMore = () => {
     setVisibleCount((prev) => prev + 10);
   };
@@ -215,9 +215,9 @@ export default function Page() {
       {/* HEADER TITLE */}
       <div className="fixed top-0 left-0 w-full h-[40vh] flex flex-col items-center justify-center z-0 text-white pointer-events-none">
         <h1 className="text-4xl md:text-6xl font-black tracking-tighter mb-2">CROSSA</h1>
-        {/* <div className="flex items-center gap-3 text-lg md:text-xl font-medium bg-black/30 px-6 py-2 rounded-full backdrop-blur-sm border border-white/10">
+        <div className="flex items-center gap-3 text-lg md:text-xl font-medium bg-black/30 px-6 py-2 rounded-full backdrop-blur-sm border border-white/10">
             <span>{headerData?.from}</span> <ArrowRight size={18} /> <span>{headerData?.to}</span>
-        </div> */}
+        </div>
       </div>
 
       <div className="relative z-10">
@@ -478,5 +478,14 @@ export default function Page() {
         </div>
       </div>
     </div>
+  );
+}
+
+// --- 4. EXPORT DEFAULT WITH SUSPENSE WRAPPER ---
+export default function PageWrapper() {
+  return (
+    <Suspense fallback={<div className="min-h-screen flex items-center justify-center font-bold text-gray-500">Loading Search...</div>}>
+      <BusListingContent />
+    </Suspense>
   );
 }

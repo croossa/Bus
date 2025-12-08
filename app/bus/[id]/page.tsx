@@ -2,7 +2,9 @@
 
 import { useParams, useRouter } from "next/navigation";
 import CryptoJS from "crypto-js";
-import { useEffect, useState, useMemo } from "react";
+import React, { useEffect, useState, useMemo, Suspense } from "react";
+import Image from "next/image";
+import bgImage from "@/public/assets/searchHeader.jpg";
 import { ArrowLeft, User, Disc, MapPin, CheckCircle, AlertCircle, Info, Armchair, Loader2 } from "lucide-react";
 import Script from "next/script";
 import {
@@ -39,7 +41,7 @@ interface Seat {
   Seat_Number: string;
   Seat_Key: string;
   Ladies_Seat: boolean;
-  FareMaster: FareMaster;
+  FareMaster?: FareMaster;
 }
 
 interface PrimaryPaxDetail {
@@ -49,7 +51,8 @@ interface PrimaryPaxDetail {
   Gender: number; 
 }
 
-export default function SeatSelectionPage() {
+// --- INNER COMPONENT (LOGIC) ---
+function SeatSelectionContent() {
   const { id } = useParams();
   const router = useRouter();
   
@@ -87,7 +90,7 @@ export default function SeatSelectionPage() {
         description, 
         type,
         onConfirm: () => {
-            if (type !== 'loading') { 
+            if (type !== 'loading') {
                 setIsAlertOpen(false);
                 onConfirm();
             }
@@ -150,7 +153,7 @@ export default function SeatSelectionPage() {
     fetchSeatMap();
   }, [id]);
 
-  // --- LOGIC: SEPARATE DECKS & CALCULATE DIMENSIONS ---
+  // --- GRID CALCULATION ---
   const { lowerDeck, upperDeck, hasUpperDeck } = useMemo(() => {
     if (!seatData || !seatData.SeatMap) return { lowerDeck: [], upperDeck: [], hasUpperDeck: false };
 
@@ -158,7 +161,6 @@ export default function SeatSelectionPage() {
     const upper: Seat[] = [];
 
     seatData.SeatMap.forEach((seat: Seat) => {
-      // ZIndex "0" = Lower, "1" = Upper
       if (seat.ZIndex === "1") {
         upper.push(seat);
       } else {
@@ -174,8 +176,8 @@ export default function SeatSelectionPage() {
   }, [seatData]);
 
   const getGridDimensions = (seats: Seat[]) => {
-    let maxCols = 0; // Visual X (API Row)
-    let maxRows = 0; // Visual Y (API Column)
+    let maxCols = 0; 
+    let maxRows = 0; 
     const occupiedCoords = new Set<string>();
 
     seats.forEach((seat) => {
@@ -187,7 +189,6 @@ export default function SeatSelectionPage() {
         if (colIndex + width > maxCols) maxCols = colIndex + width;
         if (rowIndex + length > maxRows) maxRows = rowIndex + length;
 
-        // Mark occupied spots
         for(let i=0; i<width; i++) {
             for(let j=0; j<length; j++) {
                 occupiedCoords.add(`${colIndex + i}-${rowIndex + j}`);
@@ -223,9 +224,26 @@ export default function SeatSelectionPage() {
   };
 
   const handleBookTicket = async () => {
-    if (selectedSeats.length === 0) return triggerAlert("No Seats Selected", "Please select at least one seat.", "error");
-    if (!contactInfo.email || !contactInfo.mobile) return triggerAlert("Missing Info", "Please provide contact details.", "error");
-    if (!primaryPax.Name || !primaryPax.Age) return triggerAlert("Missing Info", "Please provide passenger details.", "error");
+    const missingFields: string[] = [];
+
+    if (selectedSeats.length === 0) missingFields.push("Seat Selection");
+    if (!contactInfo.email?.trim()) missingFields.push("Email Address");
+    if (!contactInfo.mobile?.trim()) missingFields.push("Mobile Number");
+    if (!primaryPax.Name?.trim()) missingFields.push("Passenger Name");
+    if (!primaryPax.Age?.trim()) missingFields.push("Passenger Age");
+
+    if (missingFields.length > 0) {
+        triggerAlert("Missing Details", `Please fill in: ${missingFields.join(", ")}.`, "error");
+        return;
+    }
+
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    const mobileRegex = /^[0-9]{10}$/;
+
+    if (!emailRegex.test(contactInfo.email)) return triggerAlert("Invalid Input", "Invalid email.", "error");
+    if (!mobileRegex.test(contactInfo.mobile)) return triggerAlert("Invalid Input", "Invalid mobile.", "error");
+    if (primaryPax.Name.trim().length < 2) return triggerAlert("Invalid Input", "Name too short.", "error");
+    if (parseInt(primaryPax.Age) <= 0) return triggerAlert("Invalid Input", "Invalid age.", "error");
 
     const totalAmount = calculateTotal();
     
@@ -275,7 +293,6 @@ export default function SeatSelectionPage() {
             description: "Bus Ticket Booking",
             order_id: initData.data.razorpayOrderId, 
             handler: async function (response: any) {
-                // SHOW WAITING
                 triggerAlert("Please Wait...", "Payment verified. Finalizing booking...", "loading");
 
                 try {
@@ -316,13 +333,10 @@ export default function SeatSelectionPage() {
     }
   };
 
-  // --- RENDER DECK GRID ---
   const renderDeckGrid = (seats: Seat[], title: string) => {
     if (!seats || seats.length === 0) return null;
 
     const { maxCols, maxRows, occupiedCoords } = getGridDimensions(seats);
-
-    // Map Actual Seats for quick lookup
     const seatMap = new Map<string, Seat>();
     seats.forEach((seat) => {
         const r = Number(seat.Row);
@@ -331,20 +345,12 @@ export default function SeatSelectionPage() {
     });
 
     const gridItems = [];
-    
-    // Y-Axis (Length)
     for (let row = 0; row < maxRows; row++) {
-        // X-Axis (Width)
         for (let col = 0; col < maxCols; col++) {
-            
             const coordKey = `${col}-${row}`;
-
             if (seatMap.has(coordKey)) {
-                // RENDER ACTUAL SEAT
                 gridItems.push({ type: 'seat', data: seatMap.get(coordKey)!, col, row });
             } else if (!occupiedCoords.has(coordKey)) {
-                // RENDER GHOST SEAT (If not part of another seat's span)
-                // Note: Only render ghost if this column generally has seats (simple heuristic)
                 const isAisle = !seats.some(s => Number(s.Row) === col);
                 if (!isAisle) {
                      gridItems.push({ type: 'ghost', col, row });
@@ -368,7 +374,6 @@ export default function SeatSelectionPage() {
             <div className="absolute right-4 top-4 text-gray-300"><Disc size={24} /></div>
 
             {gridItems.map((item, index) => {
-                // 1-based index for CSS Grid
                 const gridCol = item.col + 1;
                 const gridRow = item.row + 1;
 
@@ -409,7 +414,6 @@ export default function SeatSelectionPage() {
                         </button>
                     );
                 } else {
-                    // GHOST SEAT
                     return (
                         <div
                             key={`ghost-${index}`}
@@ -478,8 +482,6 @@ export default function SeatSelectionPage() {
                         <h2 className="text-lg font-bold text-slate-900">Your Journey</h2>
                     </div>
                     <div className="p-6 space-y-6 max-h-[70vh] overflow-y-auto">
-                        {/* Forms... */}
-                        {/* (This part is unchanged from your previous code, keeping it concise for brevity) */}
                         <div className="space-y-4">
                              <div>
                                 <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Boarding Point</label>
@@ -511,7 +513,7 @@ export default function SeatSelectionPage() {
                                         Selected Seats: <span className="text-slate-900">{selectedSeats.map(s => s.Seat_Number).join(", ")}</span>
                                     </div>
                                     <div className="mb-4 text-sm font-bold text-slate-700">
-                                        Rate per seat: ₹{selectedSeats[0].FareMaster.Total_Amount}
+                                        Rate per seat: ₹{selectedSeats[0].FareMaster?.Total_Amount || 0}
                                     </div>
                                     <div className="grid grid-cols-12 gap-2">
                                         <div className="col-span-3">
@@ -583,5 +585,14 @@ export default function SeatSelectionPage() {
             </AlertDialogContent>
         </AlertDialog>
     </div>
+  );
+}
+
+// --- SUSPENSE WRAPPER ---
+export default function PageWrapper() {
+  return (
+    <Suspense fallback={<div className="min-h-screen flex items-center justify-center text-gray-500">Loading Seatmap...</div>}>
+      <SeatSelectionContent />
+    </Suspense>
   );
 }
