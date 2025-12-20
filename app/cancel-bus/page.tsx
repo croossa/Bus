@@ -4,7 +4,9 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import Image from "next/image";
 import bgImage from "@/public/assets/searchHeader.jpg"; 
-import { ArrowLeft, Ticket, CheckCircle, AlertCircle, Loader2, IndianRupee, Info, Bus, Calendar, Clock, MapPin } from "lucide-react";
+import { ArrowLeft, Ticket, CheckCircle, AlertCircle, Loader2, IndianRupee, Info, Bus, Calendar, Clock, MapPin, Download } from "lucide-react";
+import jsPDF from "jspdf";
+import autoTable from "jspdf-autotable";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -46,11 +48,9 @@ export default function CancelTicketPage() {
     
     const rootPNR = bookingDetails.Transport_PNR || "";
     
-    // 1. Check if API gave us a ready-made list
     if (bookingDetails.CancelTicket_Details) {
         return bookingDetails.CancelTicket_Details;
     } 
-    // 2. Check for PAX_Details
     else if (bookingDetails.PAX_Details && Array.isArray(bookingDetails.PAX_Details)) {
         return bookingDetails.PAX_Details.map((pax: any) => ({
             Seat_Number: pax.Seat_Number,
@@ -58,7 +58,6 @@ export default function CancelTicketPage() {
             Transport_PNR: pax.Transport_PNR || rootPNR 
         }));
     } 
-    // 3. Fallback for PaxList
     else if (bookingDetails.PaxList && Array.isArray(bookingDetails.PaxList)) {
         return bookingDetails.PaxList.map((pax: any) => ({
             Seat_Number: pax.SeatNo || pax.Seat_Number,
@@ -67,6 +66,199 @@ export default function CancelTicketPage() {
         }));
     }
     return [];
+  };
+
+  // --- NEW: GENERATE & DOWNLOAD PDF TICKET (FIXED ROTATION) ---
+  const handleDownloadTicket = () => {
+    if (!bookingDetails) return;
+
+    const doc = new jsPDF();
+    const isCancelled = bookingDetails.Ticket_Status_Desc?.toLowerCase().includes("cancel");
+
+    // --- 1. HEADER (BLUE) ---
+    doc.setFillColor(40, 70, 120); 
+    doc.rect(0, 0, 210, 24, "F"); // Top bar background
+
+    // Logo Text
+    doc.setTextColor(255, 255, 255);
+    doc.setFontSize(24);
+    doc.setFont("helvetica", "bold");
+    doc.text("CROSSA", 14, 16);
+    
+    // Ticket Label
+    doc.setFontSize(10);
+    doc.setFont("helvetica", "normal");
+    const titleText = isCancelled ? "E-TICKET (CANCELLED)" : "E-TICKET";
+    doc.text(titleText, 170, 16);
+
+    // --- 2. BOOKING REFERENCES ---
+    doc.setTextColor(0, 0, 0);
+    doc.setFontSize(11);
+    doc.setFont("helvetica", "bold");
+    
+    // Booking Ref
+    doc.text(`Booking Ref: ${bookingRefNo}`, 14, 40);
+    // PNR
+    doc.text(`PNR: ${bookingDetails.Transport_PNR || "N/A"}`, 140, 40);
+
+    // Divider Line
+    doc.setDrawColor(220, 220, 220);
+    doc.line(14, 45, 196, 45);
+
+    // --- 3. BUS DETAILS ---
+    let yPos = 55;
+    const leftColX = 14;
+    const leftValX = 40;
+    const rightColX = 110;
+    const rightValX = 130;
+    const lineSpacing = 8;
+
+    doc.setFontSize(10);
+
+    // Row 1: Operator
+    doc.setFont("helvetica", "bold");
+    doc.text("Operator:", leftColX, yPos);
+    doc.setFont("helvetica", "normal");
+    doc.text(bookingDetails.Bus_Detail?.Operator_Name || "N/A", leftValX, yPos);
+    
+    yPos += lineSpacing;
+
+    // Row 2: Bus Type
+    doc.setFont("helvetica", "bold");
+    doc.text("Bus Type:", leftColX, yPos);
+    doc.setFont("helvetica", "normal");
+    doc.text(bookingDetails.Bus_Detail?.Bus_Type || "N/A", leftValX, yPos);
+
+    yPos += lineSpacing + 4; // Extra space
+
+    // Row 3: From / To
+    doc.setFont("helvetica", "bold");
+    doc.text("From:", leftColX, yPos);
+    doc.setFont("helvetica", "normal");
+    doc.text(bookingDetails.Bus_Detail?.From_City || bookingDetails.Source, leftValX, yPos);
+
+    doc.setFont("helvetica", "bold");
+    doc.text("To:", rightColX, yPos);
+    doc.setFont("helvetica", "normal");
+    doc.text(bookingDetails.Bus_Detail?.To_City || bookingDetails.Destination, rightValX, yPos);
+
+    yPos += lineSpacing;
+
+    // Row 4: Date / Time
+    doc.setFont("helvetica", "bold");
+    doc.text("Date:", leftColX, yPos);
+    doc.setFont("helvetica", "normal");
+    doc.text(bookingDetails.Bus_Detail?.TravelDate || "N/A", leftValX, yPos);
+
+    doc.setFont("helvetica", "bold");
+    doc.text("Time:", rightColX, yPos);
+    doc.setFont("helvetica", "normal");
+    doc.text(bookingDetails.Bus_Detail?.Departure_Time || "N/A", rightValX, yPos);
+
+    // --- 4. PASSENGER TABLE ---
+    const passengers = bookingDetails.PAX_Details || bookingDetails.PaxList || [];
+    const tableData = passengers.map((p: any) => [
+      p.PAX_Name || p.PassengerName || "Guest",
+      p.Seat_Number || p.SeatNo,
+      p.Gender === 0 || p.Gender === "M" ? "Male" : "Female",
+      p.Age
+    ]);
+
+    autoTable(doc, {
+      startY: yPos + 10,
+      head: [['Passenger Name', 'Seat No', 'Gender', 'Age']],
+      body: tableData,
+      theme: 'grid', 
+      headStyles: { 
+          fillColor: [230, 235, 245], 
+          textColor: [0, 0, 0], 
+          fontStyle: 'bold',
+          lineWidth: 0.1,
+          lineColor: [200, 200, 200]
+      },
+      styles: { 
+          fontSize: 10, 
+          cellPadding: 3,
+          textColor: [50, 50, 50],
+          lineWidth: 0.1,
+          lineColor: [220, 220, 220]
+      },
+      alternateRowStyles: { fillColor: [255, 255, 255] }
+    });
+
+    // --- 5. CANCELLED STAMP (FIXED: GEOMETRIC APPROACH) ---
+    if (isCancelled) {
+        const pageWidth = doc.internal.pageSize.width;
+        
+        // Settings
+        const text = "CANCELLED";
+        const fontSize = 40;
+        const angle = 15;
+        const stampColor = [220, 53, 69]; // Red
+        
+        doc.saveGraphicsState();
+        doc.setTextColor(stampColor[0], stampColor[1], stampColor[2]);
+        doc.setDrawColor(stampColor[0], stampColor[1], stampColor[2]);
+        doc.setLineWidth(1.5); 
+        doc.setFontSize(fontSize);
+        doc.setFont("helvetica", "bold");
+        
+        // Position Center
+        const centerX = pageWidth / 2 + 10;
+        const centerY = 45; 
+        
+        // 1. Draw Rotated Text
+        // @ts-ignore (Angle option is valid in modern jspdf, ignoring TS warning if types are old)
+        doc.text(text, centerX, centerY, { align: 'center', angle: angle });
+
+        // 2. Draw Rotated Box (Manually calculated to avoid Matrix errors)
+        const textWidth = doc.getTextWidth(text);
+        const textHeight = fontSize / 2.5; 
+        const padding = 5;
+        
+        const w = textWidth + (padding * 2);
+        const h = textHeight + (padding * 3);
+        
+        // Convert Angle to Radians
+        const rad = angle * (Math.PI / 180);
+        const cos = Math.cos(rad);
+        const sin = Math.sin(rad);
+
+        // Helper to rotate a point around center (0,0) then translate to (centerX, centerY)
+        // Adjust centerY slightly up because text draws from baseline
+        const boxCenterY = centerY - (textHeight/2);
+
+        const getRotatedPoint = (dx: number, dy: number) => ({
+            x: centerX + (dx * cos - dy * sin),
+            y: boxCenterY + (dx * sin + dy * cos)
+        });
+
+        const halfW = w / 2;
+        const halfH = h / 2;
+
+        const p1 = getRotatedPoint(-halfW, -halfH); // Top-Left
+        const p2 = getRotatedPoint(halfW, -halfH);  // Top-Right
+        const p3 = getRotatedPoint(halfW, halfH);   // Bottom-Right
+        const p4 = getRotatedPoint(-halfW, halfH);  // Bottom-Left
+
+        // Draw Lines
+        doc.line(p1.x, p1.y, p2.x, p2.y);
+        doc.line(p2.x, p2.y, p3.x, p3.y);
+        doc.line(p3.x, p3.y, p4.x, p4.y);
+        doc.line(p4.x, p4.y, p1.x, p1.y);
+
+        doc.restoreGraphicsState();
+    }
+
+    // --- 6. FOOTER ---
+    const finalY = (doc as any).lastAutoTable.finalY + 20;
+    doc.setFontSize(9);
+    doc.setTextColor(100, 100, 100);
+    doc.text("Important: Please carry a valid ID proof while travelling.", 14, finalY);
+    doc.text("This is a computer generated ticket and does not require a signature.", 14, finalY + 5);
+
+    // --- 7. SAVE ---
+    doc.save(`${isCancelled ? 'Cancelled_' : ''}Ticket_${bookingRefNo}.pdf`);
   };
 
   // --- STEP 1: FETCH BOOKING DETAILS ---
@@ -134,26 +326,21 @@ export default function CancelTicketPage() {
         throw new Error(result.error || "Failed to calculate refund.");
       }
 
-      // --- FIX: CALCULATE FROM JSON RESPONSE ---
       const chargeData = result.data;
 
-      // 1. Get Total Paid from Booking Details
       let totalFare = 0;
       if (bookingDetails.BookingPaymentDetails && bookingDetails.BookingPaymentDetails.length > 0) {
           totalFare = Number(bookingDetails.BookingPaymentDetails[0].Payment_Amount);
       } else {
-          totalFare = 0; // Fallback
+          totalFare = 0; 
       }
 
-      // 2. Sum up Cancellation Charges
       let cancelCharges = 0;
       if (chargeData.CancellationPenaltyValues && Array.isArray(chargeData.CancellationPenaltyValues)) {
           cancelCharges = chargeData.CancellationPenaltyValues.reduce((sum: number, item: any) => sum + Number(item.Cancellation_Penalty), 0);
       }
-      // Add service charge if any
       cancelCharges += Number(chargeData.ServiceCharge || 0);
 
-      // 3. Refund Amount
       const refundAmount = totalFare - cancelCharges;
 
       setRefundInfo({
@@ -173,7 +360,7 @@ export default function CancelTicketPage() {
     }
   };
 
-  // --- STEP 3: CONFIRM CANCEL (UPDATED API URL) ---
+  // --- STEP 3: CONFIRM CANCEL ---
   const handleConfirmCancel = async () => {
     setLoading(true);
 
@@ -186,7 +373,6 @@ export default function CancelTicketPage() {
         CancellationCharge_Key: refundInfo.CancellationCharge_Key || ""
       };
 
-      // FIX: Changed from '/api/cancel-ticket' to '/api/cancellation' as requested
       const response = await fetch("/api/cancellation", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -209,7 +395,6 @@ export default function CancelTicketPage() {
     }
   };
 
-  // --- HELPER: STATUS COLOR ---
   const getStatusColor = (status: string) => {
     const s = status?.toLowerCase() || "";
     if (s.includes("confirm")) return "text-green-600 bg-green-50 border-green-200";
@@ -348,20 +533,29 @@ export default function CancelTicketPage() {
 
                         </div>
 
-                        {/* Only show Cancel button if ticket is Confirmed */}
-                        {bookingDetails.Ticket_Status_Desc?.toLowerCase() === "confirmed" ? (
+                        {/* --- BUTTONS SECTION --- */}
+                        <div className="space-y-3">
                             <button 
-                                onClick={handleCheckRefund}
-                                disabled={loading}
-                                className="w-full bg-black text-white py-4 rounded-lg font-bold uppercase tracking-widest hover:bg-gray-800 transition-all flex items-center justify-center gap-2"
+                                onClick={handleDownloadTicket}
+                                className="w-full bg-white border-2 border-slate-900 text-slate-900 py-3 rounded-lg font-bold uppercase tracking-widest hover:bg-slate-50 transition-all flex items-center justify-center gap-2"
                             >
-                                {loading ? <Loader2 className="animate-spin" /> : "Calculate Refund & Cancel"}
+                                <Download size={18} /> Download Ticket
                             </button>
-                        ) : (
-                            <div className="text-center p-4 bg-gray-100 rounded-lg text-gray-500 text-sm">
-                                This ticket cannot be cancelled (Status: {bookingDetails.Ticket_Status_Desc})
-                            </div>
-                        )}
+
+                            {bookingDetails.Ticket_Status_Desc?.toLowerCase().includes("confirm") ? (
+                                <button 
+                                    onClick={handleCheckRefund}
+                                    disabled={loading}
+                                    className="w-full bg-black text-white py-4 rounded-lg font-bold uppercase tracking-widest hover:bg-gray-800 transition-all flex items-center justify-center gap-2"
+                                >
+                                    {loading ? <Loader2 className="animate-spin" /> : "Calculate Refund & Cancel"}
+                                </button>
+                            ) : (
+                                <div className="text-center p-4 bg-gray-100 rounded-lg text-gray-500 text-sm">
+                                    This ticket cannot be cancelled (Status: {bookingDetails.Ticket_Status_Desc})
+                                </div>
+                            )}
+                        </div>
                     </div>
                 )}
 
@@ -426,7 +620,6 @@ export default function CancelTicketPage() {
         </div>
       </div>
 
-      {/* ALERT DIALOG */}
       <AlertDialog open={isAlertOpen} onOpenChange={setIsAlertOpen}>
         <AlertDialogContent className="bg-white rounded-xl shadow-2xl border-0">
             <AlertDialogHeader>

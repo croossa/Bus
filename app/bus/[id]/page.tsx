@@ -256,7 +256,7 @@ function SeatSelectionContent() {
         Customer_Mobile: contactInfo.mobile,
         Passenger_Mobile: contactInfo.mobile,
         Passenger_Email: contactInfo.email,
-        SendEmail: true, SendSMS: true, GST: false, CorporatePaymentMode: 0, CorporateStatus: "0",
+        SendEmail: false, SendSMS: true, GST: false, CorporatePaymentMode: 0, CorporateStatus: "0",
         CostCenterId: 0, Deal_Key: "", GSTIN: "", GSTINHolderAddress: "", GSTINHolderName: "", ProjectId: 1, Remarks: "Online Booking",
         PAX_Details: selectedSeats.map((seat, index) => ({
             PAX_Id: index + 1,

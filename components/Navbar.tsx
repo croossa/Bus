@@ -48,7 +48,7 @@ export default function Navbar() {
               href="/cancel-bus"
               className="border border-white/30 px-5 py-2 rounded-full hover:bg-white hover:text-black transition-all"
             >
-              Cancel Ticket
+              Bus Ticket
             </Link>
           </li>
         </ul>
@@ -86,7 +86,7 @@ export default function Navbar() {
             <Link href="/contact">Contact</Link>
           </li>
           <li onClick={() => setIsOpen(false)}>
-            <Link href="/cancel-bus" className="text-[#ceb45f]">Cancel Ticket</Link>
+            <Link href="/cancel-bus" className="text-[#ceb45f]">Bus Ticket</Link>
           </li>
         </ul>
       </div>
