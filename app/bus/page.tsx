@@ -39,7 +39,7 @@ interface Seat {
   Seat_Number: string;
   Seat_Key: string;
   Ladies_Seat: boolean;
-  FareMaster?: FareMaster; // Made Optional to be safe
+  FareMaster?: FareMaster;
 }
 
 interface PrimaryPaxDetail {
@@ -98,8 +98,15 @@ function SeatSelectionContent() {
     setIsAlertOpen(true);
   };
 
-  // --- INITIALIZATION ---
+  // --- INITIALIZATION (FIXED) ---
   useEffect(() => {
+    // 1. CLEANUP STEP: Wipe everything immediately!
+    setLoading(true);
+    setSeatData(null);       // Clears old grid
+    setSelectedSeats([]);    // Clears old selections
+    setParamsData(null);     // Clears old header info
+    setError("");
+
     if (!encryptedSearch) {
         setLoading(false);
         return;
@@ -110,15 +117,21 @@ function SeatSelectionContent() {
         const secretKey = process.env.NEXT_PUBLIC_SECRET_KEY;
         if (!secretKey) throw new Error("Secret Key missing");
 
-        const safeString = encryptedSearch.replace(/ /g, '+');
-        const bytes = CryptoJS.AES.decrypt(safeString, secretKey);
-        const decryptedString = bytes.toString(CryptoJS.enc.Utf8);
-        
-        if (!decryptedString) throw new Error("Failed to decrypt booking details.");
+        // Safe Decryption
+        let parsedParams;
+        try {
+            const safeString = encryptedSearch.replace(/ /g, '+');
+            const bytes = CryptoJS.AES.decrypt(safeString, secretKey);
+            const decryptedString = bytes.toString(CryptoJS.enc.Utf8);
+            
+            if (!decryptedString) throw new Error("Decryption empty");
+            parsedParams = JSON.parse(decryptedString);
+            setParamsData(parsedParams);
+        } catch (decryptError) {
+            throw new Error("Invalid or expired booking link. Please search again.");
+        }
 
-        const parsedParams = JSON.parse(decryptedString);
-        setParamsData(parsedParams);
-
+        // Fetch Data
         const response = await fetch("/api/seatmap", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -523,7 +536,6 @@ function SeatSelectionContent() {
                                         Selected Seats: <span className="text-slate-900">{selectedSeats.map(s => s.Seat_Number).join(", ")}</span>
                                     </div>
                                     <div className="mb-4 text-sm font-bold text-slate-700">
-                                        {/* FIX: ADDED OPTIONAL CHAINING */}
                                         Rate per seat: ₹{selectedSeats[0]?.FareMaster?.Total_Amount || 0}
                                     </div>
                                     <div className="grid grid-cols-12 gap-2">

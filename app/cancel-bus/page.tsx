@@ -634,7 +634,6 @@ export default function CancelTicketPage() {
             </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-
     </div>
   );
 }
