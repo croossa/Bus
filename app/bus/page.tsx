@@ -3,7 +3,7 @@
 import { useRouter, useSearchParams } from "next/navigation";
 import CryptoJS from "crypto-js";
 import React, { useEffect, useState, useMemo, Suspense } from "react";
-import { ArrowLeft, User, Disc, MapPin, CheckCircle, AlertCircle, Info, Armchair, Loader2 } from "lucide-react";
+import { ArrowLeft, User, Disc, MapPin, CheckCircle, AlertCircle, Info, Armchair, Loader2, Receipt } from "lucide-react";
 import Script from "next/script";
 import {
   AlertDialog,
@@ -14,6 +14,9 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+
+// --- CONFIGURATION ---
+const PLATFORM_FEE_PER_SEAT = 15; // Your friend's profit per seat
 
 // --- TYPES ---
 interface FareDetail {
@@ -98,13 +101,13 @@ function SeatSelectionContent() {
     setIsAlertOpen(true);
   };
 
-  // --- INITIALIZATION (FIXED) ---
+  // --- INITIALIZATION ---
   useEffect(() => {
-    // 1. CLEANUP STEP: Wipe everything immediately!
+    // 1. CLEANUP: Wipe old data immediately to fix "Ghost Data" bug
     setLoading(true);
-    setSeatData(null);       // Clears old grid
-    setSelectedSeats([]);    // Clears old selections
-    setParamsData(null);     // Clears old header info
+    setSeatData(null);
+    setSelectedSeats([]);
+    setParamsData(null);
     setError("");
 
     if (!encryptedSearch) {
@@ -117,21 +120,18 @@ function SeatSelectionContent() {
         const secretKey = process.env.NEXT_PUBLIC_SECRET_KEY;
         if (!secretKey) throw new Error("Secret Key missing");
 
-        // Safe Decryption
         let parsedParams;
         try {
             const safeString = encryptedSearch.replace(/ /g, '+');
             const bytes = CryptoJS.AES.decrypt(safeString, secretKey);
             const decryptedString = bytes.toString(CryptoJS.enc.Utf8);
-            
-            if (!decryptedString) throw new Error("Decryption empty");
+            if (!decryptedString) throw new Error("Decryption failed");
             parsedParams = JSON.parse(decryptedString);
             setParamsData(parsedParams);
-        } catch (decryptError) {
-            throw new Error("Invalid or expired booking link. Please search again.");
+        } catch (decryptErr) {
+            throw new Error("Invalid booking link.");
         }
 
-        // Fetch Data
         const response = await fetch("/api/seatmap", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -171,7 +171,7 @@ function SeatSelectionContent() {
     fetchSeatMap();
   }, [encryptedSearch]);
 
-  // --- LOGIC: SEPARATE DECKS & CALCULATE DIMENSIONS ---
+  // --- LOGIC: DECKS & DIMENSIONS ---
   const { lowerDeck, upperDeck, hasUpperDeck } = useMemo(() => {
     if (!seatData || !seatData.SeatMap) return { lowerDeck: [], upperDeck: [], hasUpperDeck: false };
 
@@ -237,8 +237,17 @@ function SeatSelectionContent() {
     setPrimaryPax((prev) => ({ ...prev, [field]: value }));
   };
 
-  const calculateTotal = () => {
+  // --- NEW CALCULATION LOGIC (WITH PROFIT) ---
+  const calculateBaseFare = () => {
     return selectedSeats.reduce((acc, seat) => acc + Number(seat.FareMaster?.Total_Amount || 0), 0);
+  };
+
+  const calculatePlatformFees = () => {
+    return selectedSeats.length * PLATFORM_FEE_PER_SEAT;
+  };
+
+  const calculateGrandTotal = () => {
+    return calculateBaseFare() + calculatePlatformFees();
   };
 
   const handleBookTicket = async () => {
@@ -263,7 +272,8 @@ function SeatSelectionContent() {
     if (primaryPax.Name.trim().length < 2) return triggerAlert("Invalid Input", "Name too short.", "error");
     if (parseInt(primaryPax.Age) <= 0) return triggerAlert("Invalid Input", "Invalid age.", "error");
 
-    const totalAmount = calculateTotal();
+    // USE THE GRAND TOTAL (Base + Fee)
+    const totalPayableAmount = calculateGrandTotal();
     
     const busPayload = {
         Boarding_Id: boardingId,
@@ -294,7 +304,10 @@ function SeatSelectionContent() {
         const initRes = await fetch("/api/tempbooking", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ busPayload, amount: totalAmount })
+            body: JSON.stringify({ 
+                busPayload, 
+                amount: totalPayableAmount // SEND THE FULL AMOUNT
+            })
         });
         const initData = await initRes.json();
         if (!initRes.ok) {
@@ -322,7 +335,7 @@ function SeatSelectionContent() {
                             razorpayPaymentId: response.razorpay_payment_id,
                             razorpayOrderId: response.razorpay_order_id,
                             razorpaySignature: response.razorpay_signature,
-                            amount: totalAmount
+                            amount: totalPayableAmount
                         })
                     });
                     const confirmData = await confirmRes.json();
@@ -476,6 +489,7 @@ function SeatSelectionContent() {
         </div>
 
         <div className="max-w-7xl mx-auto px-4 py-8 grid grid-cols-1 lg:grid-cols-12 gap-8">
+            {/* LEFT COLUMN: SEAT MAP */}
             <div className="lg:col-span-7 xl:col-span-8 flex flex-col items-center lg:items-start">
                 <div className="w-full bg-yellow-50 border border-yellow-200 rounded-lg p-4 mb-6 flex items-start gap-3 text-yellow-800">
                     <Info className="shrink-0 mt-0.5" size={18} />
@@ -498,7 +512,7 @@ function SeatSelectionContent() {
                 )}
             </div>
             
-            {/* RIGHT COLUMN */}
+            {/* RIGHT COLUMN: SUMMARY */}
             <div className="lg:col-span-5 xl:col-span-4">
                  <div className="bg-white rounded-xl shadow-lg border border-gray-100 overflow-hidden sticky top-24">
                     <div className="p-6 bg-slate-50 border-b border-gray-100">
@@ -535,9 +549,6 @@ function SeatSelectionContent() {
                                     <div className="mb-4 text-xs font-bold text-slate-500 uppercase tracking-wider">
                                         Selected Seats: <span className="text-slate-900">{selectedSeats.map(s => s.Seat_Number).join(", ")}</span>
                                     </div>
-                                    <div className="mb-4 text-sm font-bold text-slate-700">
-                                        Rate per seat: ₹{selectedSeats[0]?.FareMaster?.Total_Amount || 0}
-                                    </div>
                                     <div className="grid grid-cols-12 gap-2">
                                         <div className="col-span-3">
                                             <select className="w-full p-2 text-sm border rounded" value={primaryPax.Title} onChange={(e) => handlePrimaryPaxChange("Title", e.target.value)}>
@@ -573,13 +584,30 @@ function SeatSelectionContent() {
                             </div>
                         )}
                     </div>
+                    
+                    {/* --- PRICE BREAKDOWN SECTION --- */}
                     <div className="p-6 bg-slate-50 border-t border-gray-200">
-                        <div className="flex justify-between items-end mb-4">
-                            <span className="text-gray-500 text-sm">Total Amount</span>
-                            <span className="text-3xl font-black text-slate-900">₹{calculateTotal().toFixed(2)}</span>
+                        {selectedSeats.length > 0 && (
+                            <div className="space-y-2 mb-4 text-sm">
+                                <div className="flex justify-between text-gray-600">
+                                    <span>Base Fare ({selectedSeats.length} seats)</span>
+                                    <span>₹{calculateBaseFare().toFixed(2)}</span>
+                                </div>
+                                <div className="flex justify-between text-slate-800 font-medium">
+                                    <span className="flex items-center gap-1"><Receipt size={14}/> Platform Fees</span>
+                                    <span>₹{calculatePlatformFees().toFixed(2)}</span>
+                                </div>
+                            </div>
+                        )}
+
+                        <div className="flex justify-between items-end mb-4 pt-3 border-t border-gray-200">
+                            <span className="text-gray-900 font-bold">Total Payable</span>
+                            <span className="text-3xl font-black text-slate-900">
+                                ₹{calculateGrandTotal().toFixed(2)}
+                            </span>
                         </div>
                         <button onClick={handleBookTicket} disabled={selectedSeats.length === 0} className={`w-full py-4 font-bold text-sm tracking-widest uppercase rounded-lg flex items-center justify-center gap-2 transition-all ${selectedSeats.length > 0 ? "bg-black text-white hover:bg-gray-800 shadow-lg cursor-pointer" : "bg-gray-200 text-gray-400 cursor-not-allowed"}`}>
-                            Confirm Booking <CheckCircle size={18} />
+                            Proceed to Pay <CheckCircle size={18} />
                         </button>
                     </div>
                 </div>
