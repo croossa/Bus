@@ -24,7 +24,7 @@ export default function Footer() {
         {/* 1. LEFT COLUMN: LOGO & DESCRIPTION (Takes up 2 columns on large screens) */}
         <div className="lg:col-span-2 max-w-xl">
           <h2 className="text-2xl font-bold">
-            <span className="text-[#ceb45f]">CROSSA</span>{" "}
+            <span className="text-[#ceb45f]">CROOSSA</span>{" "}
             <span className="text-white">BUS TRANSFERS</span>
           </h2>
 
@@ -77,7 +77,7 @@ export default function Footer() {
 
       {/* COPYRIGHT BAR */}
       <div className="mt-20 pt-8 border-t border-white/10 text-center text-sm text-gray-400">
-        <p>© All Rights Reserved - 2025 - <span className="text-[#ceb45f] font-bold">Crossa</span></p>
+        <p>© All Rights Reserved - 2025 - <span className="text-[#ceb45f] font-bold">Croossa</span></p>
       </div>
     </footer>
   );
