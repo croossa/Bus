@@ -32,7 +32,7 @@ export default function Navbar() {
       >
         {/* LOGO - Clicks to Home */}
         <Link href="/">
-          <h1 className="text-white text-2xl font-bold cursor-pointer tracking-wider">CROSSA</h1>
+          <h1 className="text-white text-2xl font-bold cursor-pointer tracking-wider">CROOSSA</h1>
         </Link>
 
         {/* DESKTOP MENU */}
@@ -69,7 +69,7 @@ export default function Navbar() {
         }`}
       >
         <div className="flex items-center justify-between p-6 border-b border-white/10">
-          <h1 className="text-white text-2xl font-bold tracking-wider">CROSSA</h1>
+          <h1 className="text-white text-2xl font-bold tracking-wider">CROOSSA</h1>
           <button
             className="text-white focus:outline-none"
             onClick={() => setIsOpen(false)}
