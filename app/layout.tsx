@@ -18,6 +18,9 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
   title: "Home Page | Crossa Travels",
   description: "Home Page Of Crosssa",
+  verification: {
+    google: "qihoI8jehyTXSx3ucxsW1tjIliw0f_Mvnn9E26xRzJI",
+  },
 };
 
 export default function RootLayout({
