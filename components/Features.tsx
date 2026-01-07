@@ -33,7 +33,7 @@ export default function Features() {
         {/* Header */}
         <div className="text-center mb-16">
           <h2 className="text-3xl md:text-5xl font-black text-slate-900 mb-4 uppercase tracking-tight">
-            Why Choose <span style={{ color: "#ceb45f" }}>Crossa?</span>
+            Why Choose <span style={{ color: "#ceb45f" }}>Croossa?</span>
           </h2>
           <p className="text-gray-500 max-w-2xl mx-auto text-lg">
             We don&apos;t just sell tickets; we sell a seamless travel experience.
