@@ -222,7 +222,7 @@ function BusListingContent() {
 
       {/* HEADER TITLE */}
       <div className="fixed top-0 left-0 w-full h-[40vh] flex flex-col items-center justify-center z-0 text-white pointer-events-none">
-        <h1 className="text-4xl md:text-6xl font-black tracking-tighter mb-2">CROSSA</h1>
+        <h1 className="text-4xl md:text-6xl font-black tracking-tighter mb-2">CROOSSA</h1>
         <div className="flex items-center gap-3 text-lg md:text-xl font-medium bg-black/30 px-6 py-2 rounded-full backdrop-blur-sm border border-white/10">
             <span>{headerData?.from}</span> <ArrowRight size={18} /> <span>{headerData?.to}</span>
         </div>
