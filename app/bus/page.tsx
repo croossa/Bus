@@ -16,7 +16,7 @@ import {
 } from "@/components/ui/alert-dialog";
 
 // --- CONFIGURATION ---
-const PLATFORM_FEE_PER_SEAT = 15; // Your friend's profit per seat
+const PLATFORM_FEE_PER_SEAT = 0; // Your friend's profit per seat
 
 // --- TYPES ---
 interface FareDetail {
