@@ -15,16 +15,14 @@ interface CityApiResponse {
 }
 
 // --- IN-MEMORY CACHE ---
-// Stores city list so we don't fetch it on every single search request
 let cityCache: City[] | null = null;
 
-// --- HELPER FUNCTION ---
+// --- HELPER: FETCH CITY LIST ---
 async function fetchCityList(userId: string, pwd: string, apiUrl: string): Promise<City[]> {
-  // 1. Return cached data if available to save time
   if (cityCache) return cityCache;
 
-  console.log("Fetching City List from External API...");
-  
+  console.log("🌍 [API CALL] Fetching City List from External API...");
+
   try {
     const response = await fetch(`${apiUrl}/Bus_CityList`, {
       method: "POST",
@@ -40,54 +38,81 @@ async function fetchCityList(userId: string, pwd: string, apiUrl: string): Promi
       }),
     });
 
-    if (!response.ok) {
-      throw new Error(`Failed to fetch cities: ${response.statusText}`);
-    }
+    if (!response.ok) throw new Error(`Failed to fetch cities: ${response.statusText}`);
 
     const data: CityApiResponse = await response.json();
-    
+
     if (data.CityDetails && Array.isArray(data.CityDetails)) {
-      cityCache = data.CityDetails; // Save to cache
+      cityCache = data.CityDetails;
+      console.log(`✅ [SUCCESS] Cached ${data.CityDetails.length} cities.`);
       return data.CityDetails;
     }
-    
     return [];
   } catch (error) {
-    console.error("City List Fetch Error:", error);
+    console.error("❌ [EXCEPTION] City List Fetch Error:", error);
     return [];
   }
 }
 
-// --- GET ROUTE (Health Check) ---
-export async function GET(req: NextRequest) {
-    return NextResponse.json({ msg: "Server is running" }, { status: 200 });
+// --- HELPER: SMART CITY MATCHING ---
+// This fixes the error by handling "Rajkot (Gujarat)" vs "Rajkot"
+function findCityMatch(inputName: string, cityList: City[]): City | undefined {
+  const target = inputName.trim().toLowerCase();
+
+  return cityList.find((c) => {
+    const dbName = c.CityName.toLowerCase();
+    
+    // 1. Check Exact Match (e.g., "Surat" === "Surat")
+    if (dbName === target) return true;
+
+    // 2. Check "Name (State)" Match (e.g., "Rajkot (Gujarat)" matches "Rajkot")
+    const simpleName = dbName.split('(')[0].trim();
+    if (simpleName === target) return true;
+
+    return false;
+  });
 }
 
-// --- POST ROUTE (Search Logic) ---
+// --- GET ROUTE ---
+export async function GET(req: NextRequest) {
+  return NextResponse.json({ msg: "Server is running" }, { status: 200 });
+}
+
+// --- POST ROUTE ---
 export async function POST(req: NextRequest) {
   try {
-    const url = process.env.API_URL as string; 
+    const url = process.env.API_URL as string;
     const userId = process.env.BUS_API_USER_ID as string;
     const pwd = process.env.BUS_API_PASSWORD as string;
 
-    // 1. Parse Frontend Request
+    // 1. Parse Input
     const body = await req.json();
     const { from, to, date } = body;
+
+    console.log("📩 [INPUT]", { from, to, date });
 
     if (!from || !to || !date) {
       return NextResponse.json({ msg: "Missing required fields" }, { status: 400 });
     }
 
-    // 2. Fetch City List (From Cache or API)
+    // 2. Fetch Cities
     const allCities = await fetchCityList(userId, pwd, url);
 
-    // 3. Lookup IDs (Case-Insensitive)
-    const fromCity = allCities.find(
-      (c) => c.CityName.toLowerCase() === from.toLowerCase()
-    );
-    const toCity = allCities.find(
-      (c) => c.CityName.toLowerCase() === to.toLowerCase()
-    );
+    if (!allCities || allCities.length === 0) {
+      return NextResponse.json({ msg: "Internal Error: Could not load city data." }, { status: 500 });
+    }
+
+    // 3. Find IDs using the new Smart Matching function
+    const fromCity = findCityMatch(from, allCities);
+    const toCity = findCityMatch(to, allCities);
+
+    // --- DEBUG LOGGING ---
+    if (!fromCity) console.error(`❌ Failed to find FROM city: "${from}"`);
+    if (!toCity) console.error(`❌ Failed to find TO city: "${to}"`);
+    
+    if (fromCity) console.log(`✅ Matched FROM: "${from}" -> ID: ${fromCity.CityID} (${fromCity.CityName})`);
+    if (toCity) console.log(`✅ Matched TO: "${to}" -> ID: ${toCity.CityID} (${toCity.CityName})`);
+    // ---------------------
 
     if (!fromCity || !toCity) {
       return NextResponse.json(
@@ -96,15 +121,11 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // 4. Format Date (YYYY-MM-DD -> MM/DD/YYYY)
+    // 4. Format Date
     const [year, month, day] = date.split("-");
     const formattedDate = `${month}/${day}/${year}`;
 
-    console.log(
-      `Searching Buses: ${fromCity.CityName} (${fromCity.CityID}) -> ${toCity.CityName} (${toCity.CityID}) on ${formattedDate}`
-    );
-
-    // 5. Call External Search API
+    // 5. Call External API
     const apiResponse = await fetch(`${url}/Bus_Search`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -116,18 +137,17 @@ export async function POST(req: NextRequest) {
           IP_Address: "127.0.0.1",
           IMEI_Number: "123456789",
         },
-        From_City: `${fromCity.CityID.toString()}` ,  //  102
-        To_City: `${toCity.CityID.toString()}`,  //  3
+        From_City: fromCity.CityID.toString(),
+        To_City: toCity.CityID.toString(),
         TravelDate: formattedDate,
       }),
     });
 
     const data = await apiResponse.json();
-
     return NextResponse.json({ msg: "Success", data }, { status: apiResponse.status });
 
   } catch (error) {
-    console.error("Search API Error:", error);
+    console.error("🔥 [CRITICAL ERROR]", error);
     return NextResponse.json(
       { msg: "Internal Server Error", error: String(error) },
       { status: 500 }
