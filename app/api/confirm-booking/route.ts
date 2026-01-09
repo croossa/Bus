@@ -1,43 +1,36 @@
 import { NextRequest, NextResponse } from "next/server";
 import crypto from "crypto";
-import connectDB from "@/lib/mongodb"; // 1. Import DB Connection
-import Booking from "@/models/Booking"; // 2. Import Booking Model
+import connectDB from "@/lib/mongodb";
+import Booking from "@/models/Booking";
 
 export async function POST(req: NextRequest) {
   try {
-    // 0. Connect to Database
     await connectDB();
 
-    // 1. Get Secrets
-    const busApiUrl = process.env.API_URL;
+    // 1. Get ALL Secrets (Now including TRADE_API_URL)
+    const busApiUrl = process.env.API_URL;       // For Bus_Ticketing
+    const tradeApiUrl = process.env.TRADE_API_URL; // For AddPayment
     const busUser = process.env.BUS_API_USER_ID;
     const busPwd = process.env.BUS_API_PASSWORD;
     const razorpaySecret = process.env.RAZORPAY_KEY_SECRET;
 
-    if (!busApiUrl || !busUser || !razorpaySecret) {
+    // Validate config
+    if (!busApiUrl || !tradeApiUrl || !busUser || !razorpaySecret) {
+      console.error("❌ Config Missing. Check API_URL and TRADE_API_URL in .env");
       return NextResponse.json({ msg: "Server configuration missing" }, { status: 500 });
     }
 
-    // 2. Construct Trade API URL
-    const tradeApiUrl = busApiUrl.replace(
-      "BusHost/BusAPIService.svc",
-      "tradehost/TradeAPIService.svc"
-    );
-
-    // 3. Get Data from Frontend
+    // 2. Get Data from Frontend
     const body = await req.json();
     const {
       busOrderKey,
       razorpayPaymentId,
       razorpayOrderId,
       razorpaySignature,
-      amount,
-      // Add extra fields if you need them for the DB (like user email, phone, etc.)
-      userEmail, 
-      userPhone
+      amount
     } = body;
 
-    // 4. Verify Razorpay Signature
+    // 3. Verify Razorpay Signature
     const bodyData = razorpayOrderId + "|" + razorpayPaymentId;
     const expectedSignature = crypto
       .createHmac("sha256", razorpaySecret)
@@ -45,15 +38,15 @@ export async function POST(req: NextRequest) {
       .digest("hex");
 
     if (expectedSignature !== razorpaySignature) {
-      console.error("Signature Mismatch!");
       return NextResponse.json({ msg: "Invalid Payment Signature" }, { status: 400 });
     }
 
     console.log("✅ Payment Verified. Step 1: Adding Payment to Trade API...");
 
     // ---------------------------------------------------------
-    // STEP 1: CALL ADD PAYMENT (Trade API)
+    // STEP 1: CALL ADD PAYMENT (Using the NEW tradeApiUrl)
     // ---------------------------------------------------------
+    // We remove the .replace() logic and use the variable directly.
     const addPaymentEndpoint = `${tradeApiUrl}/AddPayment`;
 
     const paymentPayload = {
@@ -70,20 +63,30 @@ export async function POST(req: NextRequest) {
       ProductId: "2",
     };
 
+    console.log(`📡 Calling Trade API: ${addPaymentEndpoint}`);
+
     const paymentRes = await fetch(addPaymentEndpoint, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(paymentPayload),
     });
 
+    // Debugging Response
     const paymentResText = await paymentRes.text();
-    let paymentData;
+    if (!paymentRes.ok) {
+        console.error(`❌ Trade API Failed (${paymentRes.status}): ${paymentResText}`);
+        return NextResponse.json({ 
+            msg: `Trade API Error (${paymentRes.status})`, 
+            debug: paymentResText 
+        }, { status: paymentRes.status });
+    }
 
+    let paymentData;
     try {
       paymentData = JSON.parse(paymentResText);
     } catch (e) {
       return NextResponse.json(
-        { msg: "Trade API Error", debug: paymentResText.substring(0, 200) },
+        { msg: "Trade API returned invalid JSON", debug: paymentResText },
         { status: 500 }
       );
     }
@@ -98,7 +101,7 @@ export async function POST(req: NextRequest) {
     console.log("✅ Payment Recorded. Step 2: Finalizing Ticket...");
 
     // ---------------------------------------------------------
-    // STEP 2: CALL BUS TICKETING (Bus API)
+    // STEP 2: CALL BUS TICKETING (Using busApiUrl)
     // ---------------------------------------------------------
     const ticketEndpoint = `${busApiUrl}/Bus_Ticketing`;
     const ticketPayload = {
@@ -123,10 +126,9 @@ export async function POST(req: NextRequest) {
 
     try {
       ticketData = JSON.parse(ticketResText);
-      console.log(ticketData);
     } catch (e) {
       return NextResponse.json(
-        { msg: "Bus API Error", debug: ticketResText.substring(0, 200) },
+        { msg: "Bus API Error (Invalid JSON)", debug: ticketResText },
         { status: 500 }
       );
     }
@@ -141,40 +143,29 @@ export async function POST(req: NextRequest) {
     const pnr = ticketData.Bus_Booking_Details?.TicketNo || ticketData.Transport_PNR || "N/A";
 
     // ---------------------------------------------------------
-    // STEP 3: SAVE TO MONGODB (The Missing Part)
+    // STEP 3: SAVE TO MONGODB
     // ---------------------------------------------------------
     try {
-      // Create a new booking record
       const newBooking = new Booking({
-        bookingRefNo: busOrderKey,          // The main ID used for cancellation later
-        pnr: pnr,                           // Ticket Number
-        status: "Confirmed",                // Initial status
-        paymentId: razorpayPaymentId,       // Reference to payment
-        amount: amount,                     // Amount paid
-        orderId: razorpayOrderId,           // Razorpay Order ID
+        bookingRefNo: busOrderKey,
+        pnr: pnr,
+        status: "Confirmed",
+        paymentId: razorpayPaymentId,
+        amount: amount,
+        orderId: razorpayOrderId,
         bookingDate: new Date(),
-        // Add any other fields your Schema requires (e.g. source, destination, travelDate)
-        // These might need to be passed from the frontend in `body`
       });
 
       await newBooking.save();
-      console.log(`✅ MongoDB: Booking Saved! Ref: ${busOrderKey}, PNR: ${pnr}`);
-      
+      console.log(`✅ MongoDB: Saved! Ref: ${busOrderKey}`);
     } catch (dbError) {
-      console.error("⚠️ Failed to save booking to MongoDB:", dbError);
-      // We do NOT fail the request here because the ticket is already real.
-      // Ideally, you would log this to an error tracking system.
+      console.error("⚠️ Failed to save to MongoDB:", dbError);
     }
 
-    console.log("🎉 Booking Confirmed! PNR:", pnr);
-
-    return NextResponse.json(
-      { msg: "Success", data: ticketData },
-      { status: 200 }
-    );
+    return NextResponse.json({ msg: "Success", data: ticketData }, { status: 200 });
 
   } catch (error: any) {
-    console.error("Confirm Booking Error:", error);
-    return NextResponse.json({ msg: "Server Error", error: error.message }, { status: 500 });
+    console.error("🔥 Critical Error:", error);
+    return NextResponse.json({ msg: "Internal Server Error", error: error.message }, { status: 500 });
   }
 }
