@@ -147,13 +147,11 @@ export async function POST(req: NextRequest) {
     // ---------------------------------------------------------
     try {
       const newBooking = new Booking({
-        bookingRefNo: busOrderKey,
-        pnr: pnr,
-        status: "Confirmed",
-        paymentId: razorpayPaymentId,
-        amount: amount,
-        orderId: razorpayOrderId,
-        bookingDate: new Date(),
+        bookingRefNo: busOrderKey,        // ✅ Matches Schema
+        transportPNR: pnr,                // ✅ FIXED: Changed 'pnr' to 'transportPNR'
+        razorpayPaymentId: razorpayPaymentId, // ✅ FIXED: Changed 'paymentId' to 'razorpayPaymentId'
+        amount: amount,                   // ✅ Matches Schema
+        status: "Confirmed",              // ✅ Matches Schema
       });
 
       await newBooking.save();
